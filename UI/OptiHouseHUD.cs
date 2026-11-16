@@ -412,7 +412,7 @@ namespace OptiHouse.UI
                 : "<color=#FF4444><b>[OptiHouse: DISABLED]</b></color>";
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label("<color=#55CCFF><b>⚡ OptiHouse v1.4.0</b></color>", _titleStyle!);
+            GUILayout.Label("<color=#55CCFF><b>⚡ OptiHouse v1.4.1</b></color>", _titleStyle!);
             GUILayout.FlexibleSpace();
             GUILayout.Label(statusStr, _subTitleStyle!);
             GUILayout.EndHorizontal();
@@ -471,11 +471,6 @@ namespace OptiHouse.UI
 
             GUILayout.Label(
                 $"🚪  Interior Culling: <color=#00FF66><b>{_interiorCulled}</b> culled</color> / {_interiorTotal} total",
-                _labelStyle!
-            );
-
-            GUILayout.Label(
-                $"🛡️  Decor Colliders: <color=#00FF66><b>{_collidersCulled}</b> disabled</color> / {_collidersTotal} total",
                 _labelStyle!
             );
 

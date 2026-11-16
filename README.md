@@ -52,8 +52,7 @@ When hundreds of building pieces, torches, braziers, smoke puffs, tamed animals,
 ### 🏛️ 4. Structural Physics & Mesh Optimizations (`[Structural]`)
 - **WearNTear Weather Cover Throttling:** Throttles redundant `UpdateCover` sky raycast checks on undamaged, static building pieces by 3–5x. Drastically reduces main thread CPU frame times in dense bases.
 - **Small Piece Shadow Culling:** Automatically disables shadow-casting on small structural pieces (short beams <= 2m, iron bars, decorative poles) beyond a configurable distance (default: 15m). Massive bases look identical from a distance while saving hundreds of shadow draw calls.
-- **PhysX Decorative Collider Optimization:** Temporarily disables PhysX colliders on non-walkable decorative structural pieces (cross beams, ridge caps, trim elevated > 3.5m) to eliminate bounding-box scene query overhead.
-- **Hammer Safety Guarantee:** Instantly and automatically restores all colliders whenever a hammer, hoe, or building tool is equipped, ensuring building, snapping, and repairing remain 100% pixel-perfect.
+- **100% Structural Support Guarantee:** OptiHouse strictly preserves all physics colliders on all building pieces, ensuring Valheim's internal `WearNTear.UpdateSupport()` stability graph is never compromised. No buildings or roofs will ever collapse.
 
 ### 🚪 5. Interior Occlusion Culling (`[Interior Occlusion]`)
 - **Enclosed Base Occlusion:** Valheim lacks indoor occlusion culling, meaning indoor furniture, chests, and decor inside a closed building are still drawn even when standing outside. OptiHouse detects when the player is outside shelter and dynamically suppresses renderers of distant interior items beyond 18m.
@@ -79,7 +78,7 @@ When hundreds of building pieces, torches, braziers, smoke puffs, tamed animals,
 
 ### 📊 11. Real-Time Benchmark HUD Overlay (`[HUD & Benchmark]`)
 - **In-Game Diagnostics (`Shift+F7`):** High-contrast, flicker-free IMGUI overlay displaying real-time FPS, rolling Average FPS, true 1% Low framerate, and frame time in milliseconds.
-- **Live Base Diagnostics:** Displays total base pieces, shadow lights, smoke puffs, banner cloths, item stands, tamed animals, crafting stations, interior culled items, decorative colliders, and multi-threaded gfx jobs engine status.
+- **Live Base Diagnostics:** Displays total base pieces, shadow lights, smoke puffs, banner cloths, item stands, tamed animals, crafting stations, interior culled items, detail pieces LOD, ground loot consolidation, and multi-threaded gfx jobs engine status.
 - **Status Indicator:** Shows live `[OptiHouse: ACTIVE]` (green) or `[OptiHouse: DISABLED]` (red) status.
 - **Customizable:** Change hotkey, anchor position (`TopLeft`, `TopRight`, `BottomLeft`, `BottomRight`), and text size.
 

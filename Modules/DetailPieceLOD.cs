@@ -108,7 +108,7 @@ namespace OptiHouse.Modules
 
             _wasOptimizationActive = true;
 
-            bool isBuilding = DecorativeColliderOptimizer.IsBuildToolEquipped();
+            bool isBuilding = IsBuildToolEquipped();
             if (isBuilding)
             {
                 if (!_wasBuilding || _culledDetailCount > 0)
@@ -348,6 +348,36 @@ namespace OptiHouse.Modules
                 name.Contains("bracket") ||
                 name.Contains("wood_arch") ||
                 name.Contains("darkwood_arch"))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        public static bool IsBuildToolEquipped()
+        {
+            Player player = Player.m_localPlayer;
+            if (player == null) return false;
+
+            if (player.InPlaceMode() || player.InRepairMode())
+            {
+                return true;
+            }
+
+            if (player.GetBuildTool() != null)
+            {
+                return true;
+            }
+
+            ItemDrop.ItemData? rightItem = player.RightItem;
+            if (rightItem != null && rightItem.m_shared != null && rightItem.m_shared.m_buildPieces != null)
+            {
+                return true;
+            }
+
+            ItemDrop.ItemData? leftItem = player.LeftItem;
+            if (leftItem != null && leftItem.m_shared != null && leftItem.m_shared.m_buildPieces != null)
             {
                 return true;
             }

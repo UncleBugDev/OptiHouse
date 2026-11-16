@@ -2,6 +2,15 @@
 
 All notable changes to **OptiHouse** will be documented in this file.
 
+## [1.4.1] - 2026-11-16 (CRITICAL EMERGENCY HOTFIX)
+### Fixed
+- **CRITICAL STRUCTURAL COLLAPSE BUGFIX:**
+  - Completely neutralized and removed all collider-disabling logic from `DecorativeColliderOptimizer`.
+  - **Root Cause:** Valheim's internal structural support engine (`WearNTear.UpdateSupport()`) performs physics overlap queries specifically looking for active `Collider` components on the `piece` physics layer. When colliders on decorative beams or roof ridges were temporarily disabled, supported roof segments and upper walls calculated `support < minSupport`, lost support (`HaveSupport() == false`), and triggered cascading structural collapses (`Destroy()`).
+  - **Permanent Guarantee:** OptiHouse now **NEVER** touches or disables any physics `Collider` components on any building pieces. 100% of colliders remain active at all times.
+  - **Automatic Recovery:** Added `DecorativeColliderOptimizer.RestoreAllColliders()` on mod load to automatically re-enable any colliders in the active scene that were previously disabled, fully restoring stability to existing bases.
+  - Visual optimizations (`DetailPieceLOD`, `InteriorOcclusionOptimizer`) remain 100% intact and effective because they only toggle `Renderer.enabled` (which does not affect `WearNTear` physics).
+
 ## [1.4.0] - 2026-11-16
 ### Fixed
 - **Smart Interior Occlusion Bugfix:** Fixed a critical issue where entering shelter (`InShelter() == true`) globally restored all interior furnishings across the entire base. Now uses smart per-room distance culling: immediate room furnishings remain visible, while distant buildings and rooms remain 100% culled even when under a roof.

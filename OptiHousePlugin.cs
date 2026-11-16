@@ -13,7 +13,7 @@ namespace OptiHouse
     {
         public const string ModGUID = "com.unclebug.optihouse";
         public const string ModName = "OptiHouse";
-        public const string ModVersion = "1.4.0";
+        public const string ModVersion = "1.4.1";
 
         public static OptiHousePlugin Instance { get; private set; } = null!;
         public static ManualLogSource Log => Instance.Logger;
@@ -30,15 +30,17 @@ namespace OptiHouse
             // 1. Initialize configuration bindings
             ModConfig.Init(Config);
 
-            // 2. Initialize boot.config engine tweaks (multi-threaded gfx jobs)
+            // 2. Safety: restore all colliders in case any were disabled previously
+            DecorativeColliderOptimizer.RestoreAllColliders();
+
+            // 3. Initialize boot.config engine tweaks (multi-threaded gfx jobs)
             BootConfigTweaker.Initialize();
 
-            // 3. Initialize real-time diagnostics and benchmark HUD
+            // 4. Initialize real-time diagnostics and benchmark HUD
             gameObject.AddComponent<OptiHouseHUD>();
 
-            // 4. Initialize optimization component modules
+            // 5. Initialize optimization component modules
             gameObject.AddComponent<InteriorOcclusionOptimizer>();
-            gameObject.AddComponent<DecorativeColliderOptimizer>();
             gameObject.AddComponent<DetailPieceLOD>();
             gameObject.AddComponent<ItemDropOptimizer>();
             gameObject.AddComponent<TerrainOptimizationHelper>();
