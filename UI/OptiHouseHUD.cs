@@ -354,7 +354,7 @@ namespace OptiHouse.UI
             UpdateStyles(currentFontSize);
 
             float width = 380f;
-            float height = 530f;
+            float height = 545f;
             float margin = 16f;
 
             HudAnchorPosition anchor = ModConfig.HudPosition != null ? ModConfig.HudPosition.Value : HudAnchorPosition.TopLeft;
@@ -501,6 +501,10 @@ namespace OptiHouse.UI
             // Footer controls notice
             GUILayout.Label(
                 "<size=10><color=#7E94A8><b>[Shift+F7]</b> Toggle HUD  |  <b>[F7]</b> Toggle Optimizations</color></size>",
+                _dimStyle!
+            );
+            GUILayout.Label(
+                "<size=9><color=#FFAA44>Special thanks to <b>DaymonMontage</b> (twitch.tv/daymonmontage)</color></size>",
                 _dimStyle!
             );
 

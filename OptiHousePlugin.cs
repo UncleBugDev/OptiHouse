@@ -47,7 +47,7 @@ namespace OptiHouse
             _harmony = new Harmony(ModGUID);
             _harmony.PatchAll();
 
-            Log.LogInfo($"[{ModName}] v{ModVersion} initialized successfully.");
+            Log.LogInfo($"[{ModName}] v{ModVersion} initialized successfully. Special thanks to DaymonMontage (https://twitch.tv/daymonmontage)!");
         }
 
         private void Update()

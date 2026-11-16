@@ -163,7 +163,17 @@ A configuration file is generated at `BepInEx/config/com.unclebug.optihouse.cfg`
 
 ---
 
-## 📜 License & Credits
+## 🌟 Special Thanks & Credits
+
+This mod was created and optimized thanks to the streamer **DaymonMontage**!
+
+- 🎮 **Twitch Channel:** [twitch.tv/daymonmontage](https://www.twitch.tv/daymonmontage)
+- 🌐 **Daymon Community Hub:** [daymonmontage.github.io/daymon-site/](https://daymonmontage.github.io/daymon-site/)
+
+---
+
+## 📜 License & Authors
 
 - Author: **UncleBug** ([GitHub](https://github.com/UncleBugDev))
+- Special Thanks & Inspiration: **DaymonMontage** ([Twitch](https://www.twitch.tv/daymonmontage) | [Web Hub](https://daymonmontage.github.io/daymon-site/))
 - Licensed under the [MIT License](LICENSE).
