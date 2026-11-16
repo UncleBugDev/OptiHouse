@@ -51,6 +51,11 @@ namespace OptiHouse.UI
         private int _interiorTotal;
         private int _collidersCulled;
         private int _collidersTotal;
+        private int _detailCulled;
+        private int _detailTotal;
+        private int _droppedTotal;
+        private int _droppedMerged;
+        private int _droppedSleeping;
         private bool _gfxJobsActive;
 
         // IMGUI Drawing textures & styles
@@ -263,7 +268,33 @@ namespace OptiHouse.UI
                 _collidersTotal = 0;
             }
 
-            // 10. Multi-Threaded Gfx Jobs
+            // 10. Detail Piece LOD
+            try
+            {
+                _detailCulled = DetailPieceLOD.CulledDetailPieces;
+                _detailTotal = DetailPieceLOD.TotalDetailPieces;
+            }
+            catch
+            {
+                _detailCulled = 0;
+                _detailTotal = 0;
+            }
+
+            // 11. Dropped Items & Loot Clutter
+            try
+            {
+                _droppedTotal = ItemDropOptimizer.TotalDroppedItems;
+                _droppedMerged = ItemDropOptimizer.MergedDropsCount;
+                _droppedSleeping = ItemDropOptimizer.SleepingItemsCount;
+            }
+            catch
+            {
+                _droppedTotal = 0;
+                _droppedMerged = 0;
+                _droppedSleeping = 0;
+            }
+
+            // 12. Multi-Threaded Gfx Jobs
             try
             {
                 _gfxJobsActive = BootConfigTweaker.IsGfxJobsActive;
@@ -323,7 +354,7 @@ namespace OptiHouse.UI
             UpdateStyles(currentFontSize);
 
             float width = 380f;
-            float height = 480f;
+            float height = 530f;
             float margin = 16f;
 
             HudAnchorPosition anchor = ModConfig.HudPosition != null ? ModConfig.HudPosition.Value : HudAnchorPosition.TopLeft;
@@ -381,7 +412,7 @@ namespace OptiHouse.UI
                 : "<color=#FF4444><b>[OptiHouse: DISABLED]</b></color>";
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label("<color=#55CCFF><b>⚡ OptiHouse v1.3.0</b></color>", _titleStyle!);
+            GUILayout.Label("<color=#55CCFF><b>⚡ OptiHouse v1.4.0</b></color>", _titleStyle!);
             GUILayout.FlexibleSpace();
             GUILayout.Label(statusStr, _subTitleStyle!);
             GUILayout.EndHorizontal();
@@ -445,6 +476,16 @@ namespace OptiHouse.UI
 
             GUILayout.Label(
                 $"🛡️  Decor Colliders: <color=#00FF66><b>{_collidersCulled}</b> disabled</color> / {_collidersTotal} total",
+                _labelStyle!
+            );
+
+            GUILayout.Label(
+                $"📐  Detail Pieces LOD: <color=#00FF66><b>{_detailCulled}</b> culled</color> / {_detailTotal} total",
+                _labelStyle!
+            );
+
+            GUILayout.Label(
+                $"💎  Ground Loot Clutter: <b>{_droppedTotal}</b> (<color=#00FF66><b>{_droppedSleeping}</b> sleep</color>, <color=#55CCFF><b>{_droppedMerged}</b> merged</color>)",
                 _labelStyle!
             );
 

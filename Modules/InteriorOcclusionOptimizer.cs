@@ -124,9 +124,10 @@ namespace OptiHouse.Modules
 
             Player player = Player.m_localPlayer;
             bool isPlayerInShelter = player != null && player.InShelter();
+            bool smartCulling = ModConfig.EnableSmartInteriorCulling != null && ModConfig.EnableSmartInteriorCulling.Value;
 
-            // When player enters shelter, instantly restore all culled interior pieces
-            if (isPlayerInShelter)
+            // If smart culling is disabled, fall back to restoring everything when entering shelter
+            if (isPlayerInShelter && !smartCulling)
             {
                 if (!_wasPlayerInShelter || _culledPieceCount > 0)
                 {
@@ -136,7 +137,7 @@ namespace OptiHouse.Modules
                 return;
             }
 
-            _wasPlayerInShelter = false;
+            _wasPlayerInShelter = isPlayerInShelter;
 
             int total = _trackedPieces.Count;
             if (total == 0) return;
@@ -277,8 +278,9 @@ namespace OptiHouse.Modules
 
                 Player player = Player.m_localPlayer;
                 bool isOutside = player == null || !player.InShelter();
+                bool smart = ModConfig.EnableSmartInteriorCulling != null && ModConfig.EnableSmartInteriorCulling.Value;
 
-                if (isOptActive && isOutside)
+                if (isOptActive && (isOutside || smart))
                 {
                     Vector3 refPos = GetReferencePosition();
                     float cullDist = ModConfig.InteriorCullDistance != null

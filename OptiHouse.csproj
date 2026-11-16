@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>OptiHouse</AssemblyName>
     <RootNamespace>OptiHouse</RootNamespace>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

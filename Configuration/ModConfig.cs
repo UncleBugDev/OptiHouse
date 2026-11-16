@@ -77,9 +77,22 @@ namespace OptiHouse.Configuration
         // 11. Interior Occlusion
         public static ConfigEntry<bool> EnableInteriorCulling = null!;
         public static ConfigEntry<float> InteriorCullDistance = null!;
+        public static ConfigEntry<bool> EnableSmartInteriorCulling = null!;
 
         // 12. Terrain Helpers
         public static ConfigEntry<bool> EnableTerrainSanityCheck = null!;
+
+        // 13. Item Drops & Loot Clutter
+        public static ConfigEntry<bool> EnableItemDropOptimization = null!;
+        public static ConfigEntry<bool> EnableAutoStackNearbyItems = null!;
+        public static ConfigEntry<float> AutoStackRadius = null!;
+        public static ConfigEntry<bool> EnableDroppedItemPhysicsSleep = null!;
+        public static ConfigEntry<float> DroppedItemVfxCullDistance = null!;
+
+        // 14. Structural Detail LOD
+        public static ConfigEntry<bool> EnableDetailPieceLOD = null!;
+        public static ConfigEntry<float> DetailPieceCullDistance = null!;
+        public static ConfigEntry<float> DetailPieceRestoreDistance = null!;
 
         public static void Init(ConfigFile config)
         {
@@ -438,9 +451,16 @@ namespace OptiHouse.Configuration
                 "InteriorCullDistance",
                 18.0f,
                 new ConfigDescription(
-                    "Distance (in meters) beyond which interior furniture and pieces are culled when outside shelter.",
+                    "Distance (in meters) beyond which interior furniture and pieces are culled.",
                     new AcceptableValueRange<float>(5f, 60f)
                 )
+            );
+
+            EnableSmartInteriorCulling = config.Bind(
+                "11. Interior Occlusion",
+                "EnableSmartInteriorCulling",
+                true,
+                new ConfigDescription("Enables smart per-room distance culling so distant rooms/buildings remain culled even when inside shelter.")
             );
 
             // [12. Terrain Helpers]
@@ -449,6 +469,76 @@ namespace OptiHouse.Configuration
                 "EnableTerrainSanityCheck",
                 true,
                 new ConfigDescription("Detect legacy uncompressed terrain modification stacks in base zones and log compaction recommendations.")
+            );
+
+            // [13. Item Drops & Loot Clutter]
+            EnableItemDropOptimization = config.Bind(
+                "13. Item Drops & Loot",
+                "EnableItemDropOptimization",
+                true,
+                new ConfigDescription("Master switch for ground item drop physics sleep, auto-stacking, and particle throttling.")
+            );
+
+            EnableAutoStackNearbyItems = config.Bind(
+                "13. Item Drops & Loot",
+                "EnableAutoStackNearbyItems",
+                true,
+                new ConfigDescription("Periodically merges loose dropped items of the same type within radius into combined stacks to eliminate GameObject clutter.")
+            );
+
+            AutoStackRadius = config.Bind(
+                "13. Item Drops & Loot",
+                "AutoStackRadius",
+                3.5f,
+                new ConfigDescription(
+                    "Radius (in meters) within which identical loose item drops are merged.",
+                    new AcceptableValueRange<float>(1f, 10f)
+                )
+            );
+
+            EnableDroppedItemPhysicsSleep = config.Bind(
+                "13. Item Drops & Loot",
+                "EnableDroppedItemPhysicsSleep",
+                true,
+                new ConfigDescription("Forces PhysX Rigidbody to sleep on motionless ground items to stop continuous physics collision checks.")
+            );
+
+            DroppedItemVfxCullDistance = config.Bind(
+                "13. Item Drops & Loot",
+                "DroppedItemVfxCullDistance",
+                15.0f,
+                new ConfigDescription(
+                    "Distance beyond which item drop sparkle VFX and floating scripts are paused.",
+                    new AcceptableValueRange<float>(5f, 50f)
+                )
+            );
+
+            // [14. Structural Detail LOD]
+            EnableDetailPieceLOD = config.Bind(
+                "14. Structural Detail LOD",
+                "EnableDetailPieceLOD",
+                true,
+                new ConfigDescription("Dynamically culls renderers on small decorative micro-pieces (1m beams, cross beams, decorative brackets, trim) beyond culling distance while keeping walls and roofs 100% visible.")
+            );
+
+            DetailPieceCullDistance = config.Bind(
+                "14. Structural Detail LOD",
+                "DetailPieceCullDistance",
+                32.0f,
+                new ConfigDescription(
+                    "Distance (in meters) beyond which small decorative structural details are culled from rendering.",
+                    new AcceptableValueRange<float>(10f, 80f)
+                )
+            );
+
+            DetailPieceRestoreDistance = config.Bind(
+                "14. Structural Detail LOD",
+                "DetailPieceRestoreDistance",
+                26.0f,
+                new ConfigDescription(
+                    "Distance (in meters) at which small decorative details are restored (hysteresis margin).",
+                    new AcceptableValueRange<float>(5f, 75f)
+                )
             );
         }
     }

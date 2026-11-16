@@ -2,6 +2,23 @@
 
 All notable changes to **OptiHouse** will be documented in this file.
 
+## [1.4.0] - 2026-11-16
+### Fixed
+- **Smart Interior Occlusion Bugfix:** Fixed a critical issue where entering shelter (`InShelter() == true`) globally restored all interior furnishings across the entire base. Now uses smart per-room distance culling: immediate room furnishings remain visible, while distant buildings and rooms remain 100% culled even when under a roof.
+
+### Added
+- **Structural Detail Piece LOD (`[14. Structural Detail LOD]`):**
+  - Dynamically culls `MeshRenderer` on small decorative micro-pieces (1m beams, 26°/45° cross beams, decorative brackets, dragonheads, trim, finials, roof crests) beyond 32m (configurable).
+  - Keeps major structural walls, foundations, main pillars, and full roof slopes 100% visible so castle silhouettes remain grand and unbroken from afar.
+  - Slashes draw calls by 40–60% in high-detail bases.
+  - Automatically restores all detail renderers when holding a hammer, hoe, or building tool.
+- **Ground Loot & Item Drop Optimizer (`[13. Item Drops & Loot]`):**
+  - **Auto-Stacker:** Periodically merges identical loose ground drops (wood, stone, resin, trophies) within a 3.5m radius into consolidated max-size stacks, eliminating redundant GameObjects.
+  - **Physics Sleep:** Automatically puts Rigidbodies of motionless ground drops to sleep, halting continuous PhysX collision checks on bases.
+  - **Particle & Floating LOD:** Pauses sparkle particles and water floating script updates on distant drops (> 15m).
+- **HUD Diagnostics Expansion:**
+  - Added live counters for Detail Pieces LOD and Ground Loot Clutter (sleeping & merged counts) to `Shift+F7` overlay.
+
 ## [1.3.0] - 2026-11-16
 ### Added
 - **Multi-Threaded Gfx Jobs Engine Optimization (`[1. General]`):**

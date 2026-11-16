@@ -13,7 +13,7 @@ namespace OptiHouse
     {
         public const string ModGUID = "com.unclebug.optihouse";
         public const string ModName = "OptiHouse";
-        public const string ModVersion = "1.3.0";
+        public const string ModVersion = "1.4.0";
 
         public static OptiHousePlugin Instance { get; private set; } = null!;
         public static ManualLogSource Log => Instance.Logger;
@@ -39,6 +39,8 @@ namespace OptiHouse
             // 4. Initialize optimization component modules
             gameObject.AddComponent<InteriorOcclusionOptimizer>();
             gameObject.AddComponent<DecorativeColliderOptimizer>();
+            gameObject.AddComponent<DetailPieceLOD>();
+            gameObject.AddComponent<ItemDropOptimizer>();
             gameObject.AddComponent<TerrainOptimizationHelper>();
 
             // 5. Initialize Harmony patches
