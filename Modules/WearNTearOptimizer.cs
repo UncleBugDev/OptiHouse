@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using OptiHouse.Configuration;
 using UnityEngine;
@@ -5,31 +6,40 @@ using UnityEngine;
 namespace OptiHouse.Modules
 {
     /// <summary>
-    /// WearNTear Sky Raycast & Cover Throttling Optimizer.
-    /// Safely throttles WearNTear.UpdateCover (100m physics SphereCastNonAlloc checks)
-    /// on undamaged, static building pieces by 3-5x, drastically reducing main-thread CPU overhead
-    /// in large player bases while 100% preserving weather wear protection and structural integrity.
+    /// WearNTear Weather Cover & Material Loop Optimizer.
+    /// 1. Safely throttles WearNTear.UpdateCover (100m physics SphereCastNonAlloc checks during rain/storms)
+    ///    using accurate real-time intervals (preventing the WearNTearUpdater single-frame deltaTime bug).
+    /// 2. Skips WearNTearUpdater's per-second UpdateAshlandsMaterialValues loop on all non-Ashlands pieces
+    ///    with zero burn/ash/lava timers, eliminating tens of thousands of wasted per-second iterations.
+    /// NEVER touches UpdateSupport() or piece colliders.
     /// </summary>
     public static class WearNTearOptimizer
     {
+        private class CoverThrottleState
+        {
+            public float LastRaycastTime = -999f;
+        }
+
+        private static readonly ConditionalWeakTable<WearNTear, CoverThrottleState> _coverStates = new();
+
         private static long _raycastsThrottled;
+        private static long _ashlandsUpdatesSkipped;
+
         public static long RaycastsThrottled => _raycastsThrottled;
+        public static long AshlandsUpdatesSkipped => _ashlandsUpdatesSkipped;
 
         public static void ResetStats()
         {
             _raycastsThrottled = 0;
+            _ashlandsUpdatesSkipped = 0;
         }
 
-        /// <summary>
-        /// Harmony patch intercepting WearNTear.UpdateCover.
-        /// </summary>
         [HarmonyPatch(typeof(WearNTear), nameof(WearNTear.UpdateCover))]
         public static class WearNTear_UpdateCover_Patch
         {
             [HarmonyPrefix]
-            public static bool Prefix(WearNTear __instance, float dt, ref float ___m_updateCoverTimer)
+            public static bool Prefix(WearNTear __instance, float dt, ref float ___m_updateCoverTimer, bool ___m_inAshlands)
             {
-                // If master optimization or structural throttling is disabled, fall back to vanilla (4s interval)
                 if (!OptiHousePlugin.IsOptimizationActive ||
                     ModConfig.EnableStructuralOptimization == null ||
                     !ModConfig.EnableStructuralOptimization.Value ||
@@ -39,33 +49,83 @@ namespace OptiHouse.Modules
                     return true;
                 }
 
-                // Forced cover updates (e.g. CanHaveSnow passes dt = 100f) must always run immediately
+                // Forced cover checks (e.g. CanHaveSnow passes dt = 100f) always run immediately
                 if (dt >= 50f)
                 {
                     return true;
                 }
 
-                // If piece is damaged (< 99% HP), keep vanilla frequency (4s) so repair/decay is immediately responsive
+                // Only intercept right before vanilla's > 4f threshold triggers a raycast
+                if (___m_updateCoverTimer + dt <= 4f)
+                {
+                    return true;
+                }
+
+                // Damaged pieces (< 99% HP) keep vanilla responsiveness
                 if (__instance.GetHealthPercentage() < 0.99f)
                 {
                     return true;
                 }
 
-                // Target interval for static, healthy pieces (vanilla default is 4s, config default is 10s)
+                // Outside wet weather / Ashlands / DeepNorth, vanilla UpdateCover does zero raycasts anyway
+                bool needsCheck = ___m_inAshlands || EnvMan.IsWet();
+                if (!needsCheck)
+                {
+                    return true;
+                }
+
                 float targetInterval = ModConfig.WearNTearThrottleInterval != null
                     ? Mathf.Max(4f, ModConfig.WearNTearThrottleInterval.Value)
                     : 10f;
 
-                // Accumulate elapsed time. If below target interval, bypass the expensive physics raycast.
-                if (___m_updateCoverTimer + dt < targetInterval)
+                var state = _coverStates.GetOrCreateValue(__instance);
+                float now = Time.time;
+
+                if (state.LastRaycastTime >= 0f && now - state.LastRaycastTime < targetInterval)
                 {
-                    ___m_updateCoverTimer += dt;
+                    ___m_updateCoverTimer = 0f;
                     _raycastsThrottled++;
-                    return false; // Skip UpdateCover this cycle
+                    return false;
                 }
 
-                // Interval reached: let vanilla execute.
-                // Vanilla will increment m_updateCoverTimer, evaluate HaveRoof()/HaveAshRoof(), and reset timer to 0f.
+                state.LastRaycastTime = now;
+                return true;
+            }
+        }
+
+        [HarmonyPatch(typeof(WearNTear), nameof(WearNTear.UpdateAshlandsMaterialValues))]
+        public static class WearNTear_UpdateAshlandsMaterialValues_Patch
+        {
+            [HarmonyPrefix]
+            public static bool Prefix(
+                float time,
+                bool ___m_inAshlands,
+                float ___m_lavaTimer,
+                float ___m_ashDamageTime,
+                float ___m_burnDamageTime,
+                float ___m_ashMaterialValue,
+                ref float ___m_lastMaterialValueTimeCheck)
+            {
+                if (!OptiHousePlugin.IsOptimizationActive ||
+                    ModConfig.EnableStructuralOptimization == null ||
+                    !ModConfig.EnableStructuralOptimization.Value ||
+                    ModConfig.SkipNonAshlandsMaterialUpdates == null ||
+                    !ModConfig.SkipNonAshlandsMaterialUpdates.Value)
+                {
+                    return true;
+                }
+
+                if (!___m_inAshlands &&
+                    ___m_lavaTimer <= 0f &&
+                    ___m_ashDamageTime <= 0f &&
+                    ___m_burnDamageTime <= 0f &&
+                    ___m_ashMaterialValue == 0f)
+                {
+                    ___m_lastMaterialValueTimeCheck = time;
+                    _ashlandsUpdatesSkipped++;
+                    return false;
+                }
+
                 return true;
             }
         }

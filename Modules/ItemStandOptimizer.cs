@@ -7,25 +7,27 @@ namespace OptiHouse.Modules
 {
     /// <summary>
     /// ItemStand and ArmorStand Optimizer for OptiHouse.
-    /// Manages mounted item effects (trophies, glowing weapons like Frostner, torches, lanterns)
-    /// in high-density trophy halls and armory storage rooms.
-    /// Pauses attached ParticleSystems and disables point lights beyond a configurable distance (default 12m with 2.5m hysteresis).
+    /// Pauses attached particle effects and mounted item point lights beyond ItemStandCullDistance (default 15m).
+    /// Snapshots original enabled states when culling so empty/inactive slots stay untouched.
     /// </summary>
     public class ItemStandOptimizer : MonoBehaviour
     {
-        private static ItemStandOptimizer? _instance;
-        public static ItemStandOptimizer? Instance => _instance;
+        public static ItemStandOptimizer? Instance { get; private set; }
 
         private class TrackedStand
         {
-            public Component Stand = null!; // ItemStand or ArmorStand
+            public int InstanceId;
+            public Component Stand = null!;
             public Transform Transform = null!;
-            public bool IsArmorStand;
             public bool IsCulled;
 
             public readonly List<ParticleSystem> Particles = new List<ParticleSystem>();
             public readonly List<ParticleSystemRenderer> ParticleRenderers = new List<ParticleSystemRenderer>();
             public readonly List<Light> Lights = new List<Light>();
+
+            public readonly List<ParticleSystem> PausedParticles = new List<ParticleSystem>();
+            public readonly List<ParticleSystemRenderer> DisabledRenderers = new List<ParticleSystemRenderer>();
+            public readonly List<Light> DisabledLights = new List<Light>();
         }
 
         private static readonly List<TrackedStand> _trackedStands = new List<TrackedStand>();
@@ -40,7 +42,7 @@ namespace OptiHouse.Modules
 
         private void Awake()
         {
-            _instance = this;
+            Instance = this;
             ScanExistingStands();
         }
 
@@ -50,9 +52,9 @@ namespace OptiHouse.Modules
             _trackedStands.Clear();
             _standLookup.Clear();
             _culledStandCount = 0;
-            if (_instance == this)
+            if (Instance == this)
             {
-                _instance = null;
+                Instance = null;
             }
         }
 
@@ -63,10 +65,7 @@ namespace OptiHouse.Modules
             {
                 for (int i = 0; i < itemStands.Length; i++)
                 {
-                    if (itemStands[i] != null)
-                    {
-                        Register(itemStands[i], false);
-                    }
+                    if (itemStands[i] != null) Register(itemStands[i]);
                 }
             }
 
@@ -75,10 +74,7 @@ namespace OptiHouse.Modules
             {
                 for (int i = 0; i < armorStands.Length; i++)
                 {
-                    if (armorStands[i] != null)
-                    {
-                        Register(armorStands[i], true);
-                    }
+                    if (armorStands[i] != null) Register(armorStands[i]);
                 }
             }
         }
@@ -104,13 +100,12 @@ namespace OptiHouse.Modules
             int total = _trackedStands.Count;
             if (total == 0) return;
 
-            Vector3 refPos = GetReferencePosition();
+            Vector3 refPos = OptimizationHelpers.GetReferencePosition();
             float cullDistance = ModConfig.ItemStandCullDistance != null
                 ? ModConfig.ItemStandCullDistance.Value
-                : 12.0f;
+                : 15.0f;
 
             float cullDistSq = cullDistance * cullDistance;
-            // 2.5m hysteresis margin prevents rapid state toggles at boundary
             float restoreDistance = Mathf.Max(0f, cullDistance - 2.5f);
             float restoreDistSq = restoreDistance * restoreDistance;
 
@@ -126,10 +121,8 @@ namespace OptiHouse.Modules
                 TrackedStand item = _trackedStands[_currentIndex];
                 if (item.Stand == null || item.Transform == null)
                 {
-                    if (item.IsCulled && _culledStandCount > 0)
-                    {
-                        _culledStandCount--;
-                    }
+                    if (item.IsCulled && _culledStandCount > 0) _culledStandCount--;
+                    _standLookup.Remove(item.InstanceId);
                     _trackedStands.RemoveAt(_currentIndex);
                     if (_currentIndex > 0) _currentIndex--;
                     continue;
@@ -146,7 +139,6 @@ namespace OptiHouse.Modules
                 {
                     if (!item.IsCulled)
                     {
-                        item.IsCulled = true;
                         ApplyCull(item);
                         _culledStandCount++;
                     }
@@ -155,7 +147,6 @@ namespace OptiHouse.Modules
                 {
                     if (item.IsCulled)
                     {
-                        item.IsCulled = false;
                         RestoreEffects(item);
                         if (_culledStandCount > 0) _culledStandCount--;
                     }
@@ -163,18 +154,18 @@ namespace OptiHouse.Modules
             }
         }
 
-        public static void Register(Component stand, bool isArmorStand)
+        public static void Register(Component stand)
         {
-            if (stand == null) return;
+            if (!OptimizationHelpers.IsValidWorldObject(stand)) return;
 
             int id = stand.GetInstanceID();
             if (_standLookup.ContainsKey(id)) return;
 
             var item = new TrackedStand
             {
+                InstanceId = id,
                 Stand = stand,
                 Transform = stand.transform,
-                IsArmorStand = isArmorStand,
                 IsCulled = false
             };
 
@@ -184,15 +175,13 @@ namespace OptiHouse.Modules
                                ModConfig.EnableItemStandOptimization != null &&
                                ModConfig.EnableItemStandOptimization.Value;
 
-            Vector3 refPos = GetReferencePosition();
+            Vector3 refPos = OptimizationHelpers.GetReferencePosition();
             float cullDistance = ModConfig.ItemStandCullDistance != null
                 ? ModConfig.ItemStandCullDistance.Value
-                : 12.0f;
-            float cullDistSq = cullDistance * cullDistance;
+                : 15.0f;
 
-            if (isOptActive && (item.Transform.position - refPos).sqrMagnitude > cullDistSq)
+            if (isOptActive && (item.Transform.position - refPos).sqrMagnitude > cullDistance * cullDistance)
             {
-                item.IsCulled = true;
                 ApplyCull(item);
                 _culledStandCount++;
             }
@@ -220,27 +209,31 @@ namespace OptiHouse.Modules
 
         public static void RefreshVisuals(Component stand)
         {
-            if (stand == null) return;
+            if (!OptimizationHelpers.IsValidWorldObject(stand)) return;
 
             int id = stand.GetInstanceID();
             if (_standLookup.TryGetValue(id, out TrackedStand item))
             {
+                bool wasCulled = item.IsCulled;
+                if (wasCulled) RestoreEffects(item);
+
                 CollectEffects(item);
+
+                if (wasCulled)
+                {
+                    ApplyCull(item);
+                    // IsCulled was already counted before CollectEffects
+                }
             }
             else
             {
-                Register(stand, stand is ArmorStand);
+                Register(stand);
             }
         }
 
         private static void CollectEffects(TrackedStand item)
         {
             if (item.Stand == null) return;
-
-            if (item.IsCulled)
-            {
-                RestoreEffects(item);
-            }
 
             item.Particles.Clear();
             item.ParticleRenderers.Clear();
@@ -267,123 +260,98 @@ namespace OptiHouse.Modules
             {
                 for (int i = 0; i < lights.Length; i++)
                 {
-                    Light l = lights[i];
-                    if (l != null)
+                    if (lights[i] != null)
                     {
-                        item.Lights.Add(l);
+                        item.Lights.Add(lights[i]);
                     }
                 }
-            }
-
-            if (item.IsCulled)
-            {
-                ApplyCull(item);
             }
         }
 
         private static void ApplyCull(TrackedStand item)
         {
+            if (item.IsCulled) return;
+            item.IsCulled = true;
+            item.PausedParticles.Clear();
+            item.DisabledRenderers.Clear();
+            item.DisabledLights.Clear();
+
             for (int i = 0; i < item.Particles.Count; i++)
             {
                 ParticleSystem ps = item.Particles[i];
                 if (ps != null && ps.isPlaying)
                 {
                     ps.Pause(true);
+                    item.PausedParticles.Add(ps);
                 }
             }
 
             for (int i = 0; i < item.ParticleRenderers.Count; i++)
             {
                 ParticleSystemRenderer psr = item.ParticleRenderers[i];
-                if (psr != null)
+                if (psr != null && psr.enabled)
                 {
                     psr.enabled = false;
+                    item.DisabledRenderers.Add(psr);
                 }
             }
 
             for (int i = 0; i < item.Lights.Count; i++)
             {
                 Light l = item.Lights[i];
-                if (l != null)
+                if (l != null && l.enabled)
                 {
                     l.enabled = false;
+                    item.DisabledLights.Add(l);
                 }
             }
         }
 
         private static void RestoreEffects(TrackedStand item)
         {
-            for (int i = 0; i < item.ParticleRenderers.Count; i++)
+            if (!item.IsCulled) return;
+            item.IsCulled = false;
+
+            for (int i = 0; i < item.DisabledRenderers.Count; i++)
             {
-                ParticleSystemRenderer psr = item.ParticleRenderers[i];
-                if (psr != null)
+                if (item.DisabledRenderers[i] != null)
                 {
-                    psr.enabled = true;
+                    item.DisabledRenderers[i].enabled = true;
                 }
             }
+            item.DisabledRenderers.Clear();
 
-            for (int i = 0; i < item.Particles.Count; i++)
+            for (int i = 0; i < item.PausedParticles.Count; i++)
             {
-                ParticleSystem ps = item.Particles[i];
+                ParticleSystem ps = item.PausedParticles[i];
                 if (ps != null && ps.isPaused)
                 {
                     ps.Play(true);
                 }
             }
+            item.PausedParticles.Clear();
 
-            for (int i = 0; i < item.Lights.Count; i++)
+            for (int i = 0; i < item.DisabledLights.Count; i++)
             {
-                Light l = item.Lights[i];
-                if (l != null)
+                if (item.DisabledLights[i] != null)
                 {
-                    l.enabled = true;
+                    item.DisabledLights[i].enabled = true;
                 }
             }
+            item.DisabledLights.Clear();
         }
 
         public static void RestoreAllStands()
         {
             for (int i = 0; i < _trackedStands.Count; i++)
             {
-                TrackedStand item = _trackedStands[i];
-                if (item.IsCulled)
-                {
-                    RestoreEffects(item);
-                    item.IsCulled = false;
-                }
+                RestoreEffects(_trackedStands[i]);
             }
             _culledStandCount = 0;
-        }
-
-        private static Vector3 GetReferencePosition()
-        {
-            if (Player.m_localPlayer != null)
-            {
-                return Player.m_localPlayer.transform.position;
-            }
-            Camera mainCam = Utils.GetMainCamera();
-            if (mainCam != null)
-            {
-                return mainCam.transform.position;
-            }
-            return Vector3.zero;
         }
     }
 
     #region Harmony Patches
-
-    [HarmonyPatch(typeof(OptiHousePlugin), "Awake")]
-    public static class ItemStandOptimizer_Plugin_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(OptiHousePlugin __instance)
-        {
-            if (__instance != null && __instance.gameObject.GetComponent<ItemStandOptimizer>() == null)
-            {
-                __instance.gameObject.AddComponent<ItemStandOptimizer>();
-            }
-        }
-    }
 
     [HarmonyPatch(typeof(ItemStand), "Awake")]
     public static class ItemStand_Awake_Patch
@@ -391,7 +359,7 @@ namespace OptiHouse.Modules
         [HarmonyPostfix]
         public static void Postfix(ItemStand __instance)
         {
-            ItemStandOptimizer.Register(__instance, false);
+            ItemStandOptimizer.Register(__instance);
         }
     }
 
@@ -431,7 +399,7 @@ namespace OptiHouse.Modules
         [HarmonyPostfix]
         public static void Postfix(ArmorStand __instance)
         {
-            ItemStandOptimizer.Register(__instance, true);
+            ItemStandOptimizer.Register(__instance);
         }
     }
 

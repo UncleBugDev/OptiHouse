@@ -7,17 +7,16 @@ namespace OptiHouse.Modules
 {
     /// <summary>
     /// Cloth Optimizer for OptiHouse.
-    /// Manages Unity Cloth physics simulation on Valheim banners, flags, and tapestries.
-    /// Pauses expensive CPU vertex physics solvers when beyond the culling distance (default 15m with 3m hysteresis),
-    /// smoothly restoring simulation when the player approaches.
+    /// Pauses Unity Cloth vertex physics solvers on distant banners, flags, and tapestries
+    /// beyond BannerClothCullDistance (default 16m with 3m hysteresis).
     /// </summary>
     public class ClothOptimizer : MonoBehaviour
     {
-        private static ClothOptimizer? _instance;
-        public static ClothOptimizer? Instance => _instance;
+        public static ClothOptimizer? Instance { get; private set; }
 
         private class TrackedCloth
         {
+            public int PieceId;
             public Piece Piece = null!;
             public Cloth Cloth = null!;
             public Transform Transform = null!;
@@ -36,7 +35,7 @@ namespace OptiHouse.Modules
 
         private void Awake()
         {
-            _instance = this;
+            Instance = this;
             ScanExistingPieces();
         }
 
@@ -46,9 +45,9 @@ namespace OptiHouse.Modules
             _trackedCloths.Clear();
             _pieceLookup.Clear();
             _culledClothCount = 0;
-            if (_instance == this)
+            if (Instance == this)
             {
-                _instance = null;
+                Instance = null;
             }
         }
 
@@ -59,10 +58,9 @@ namespace OptiHouse.Modules
             {
                 for (int i = 0; i < pieces.Length; i++)
                 {
-                    Piece p = pieces[i];
-                    if (p != null)
+                    if (pieces[i] != null)
                     {
-                        RegisterPiece(p);
+                        RegisterPiece(pieces[i]);
                     }
                 }
             }
@@ -89,13 +87,12 @@ namespace OptiHouse.Modules
             int total = _trackedCloths.Count;
             if (total == 0) return;
 
-            Vector3 refPos = GetReferencePosition();
+            Vector3 refPos = OptimizationHelpers.GetReferencePosition();
             float cullDistance = ModConfig.BannerClothCullDistance != null
                 ? ModConfig.BannerClothCullDistance.Value
-                : 15.0f;
+                : 16.0f;
 
             float cullDistSq = cullDistance * cullDistance;
-            // 3.0m hysteresis margin prevents simulation churn at boundary
             float restoreDistance = Mathf.Max(0f, cullDistance - 3.0f);
             float restoreDistSq = restoreDistance * restoreDistance;
 
@@ -111,10 +108,8 @@ namespace OptiHouse.Modules
                 TrackedCloth item = _trackedCloths[_currentIndex];
                 if (item.Cloth == null || item.Transform == null || item.Piece == null)
                 {
-                    if (item.IsCulled && _culledClothCount > 0)
-                    {
-                        _culledClothCount--;
-                    }
+                    if (item.IsCulled && _culledClothCount > 0) _culledClothCount--;
+                    _pieceLookup.Remove(item.PieceId);
                     _trackedCloths.RemoveAt(_currentIndex);
                     if (_currentIndex > 0) _currentIndex--;
                     continue;
@@ -129,7 +124,7 @@ namespace OptiHouse.Modules
 
                 if (sqrDist > cullDistSq)
                 {
-                    if (!item.IsCulled)
+                    if (!item.IsCulled && item.Cloth.enabled)
                     {
                         item.Cloth.enabled = false;
                         item.IsCulled = true;
@@ -150,7 +145,7 @@ namespace OptiHouse.Modules
 
         public static void RegisterPiece(Piece piece)
         {
-            if (piece == null) return;
+            if (!OptimizationHelpers.IsValidWorldPiece(piece)) return;
 
             int pieceId = piece.GetInstanceID();
             if (_pieceLookup.ContainsKey(pieceId)) return;
@@ -159,10 +154,10 @@ namespace OptiHouse.Modules
             if (cloths == null || cloths.Length == 0) return;
 
             List<TrackedCloth> list = new List<TrackedCloth>(cloths.Length);
-            Vector3 refPos = GetReferencePosition();
+            Vector3 refPos = OptimizationHelpers.GetReferencePosition();
             float cullDistance = ModConfig.BannerClothCullDistance != null
                 ? ModConfig.BannerClothCullDistance.Value
-                : 15.0f;
+                : 16.0f;
             float cullDistSq = cullDistance * cullDistance;
 
             bool isOptActive = OptiHousePlugin.IsOptimizationActive &&
@@ -176,13 +171,14 @@ namespace OptiHouse.Modules
 
                 var item = new TrackedCloth
                 {
+                    PieceId = pieceId,
                     Piece = piece,
                     Cloth = c,
                     Transform = c.transform,
                     IsCulled = false
                 };
 
-                if (isOptActive && (item.Transform.position - refPos).sqrMagnitude > cullDistSq)
+                if (isOptActive && c.enabled && (item.Transform.position - refPos).sqrMagnitude > cullDistSq)
                 {
                     item.Cloth.enabled = false;
                     item.IsCulled = true;
@@ -209,14 +205,11 @@ namespace OptiHouse.Modules
                 for (int i = 0; i < list.Count; i++)
                 {
                     TrackedCloth item = list[i];
-                    if (item.IsCulled && _culledClothCount > 0)
+                    if (item.IsCulled)
                     {
-                        _culledClothCount--;
-                    }
-                    if (item.Cloth != null)
-                    {
-                        item.Cloth.enabled = true;
+                        if (item.Cloth != null) item.Cloth.enabled = true;
                         item.IsCulled = false;
+                        if (_culledClothCount > 0) _culledClothCount--;
                     }
                     _trackedCloths.Remove(item);
                 }
@@ -229,44 +222,17 @@ namespace OptiHouse.Modules
             for (int i = 0; i < _trackedCloths.Count; i++)
             {
                 TrackedCloth item = _trackedCloths[i];
-                if (item.Cloth != null)
+                if (item.IsCulled)
                 {
-                    item.Cloth.enabled = true;
+                    if (item.Cloth != null) item.Cloth.enabled = true;
                     item.IsCulled = false;
                 }
             }
             _culledClothCount = 0;
         }
-
-        private static Vector3 GetReferencePosition()
-        {
-            if (Player.m_localPlayer != null)
-            {
-                return Player.m_localPlayer.transform.position;
-            }
-            Camera mainCam = Utils.GetMainCamera();
-            if (mainCam != null)
-            {
-                return mainCam.transform.position;
-            }
-            return Vector3.zero;
-        }
     }
 
     #region Harmony Patches
-
-    [HarmonyPatch(typeof(OptiHousePlugin), "Awake")]
-    public static class ClothOptimizer_Plugin_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(OptiHousePlugin __instance)
-        {
-            if (__instance != null && __instance.gameObject.GetComponent<ClothOptimizer>() == null)
-            {
-                __instance.gameObject.AddComponent<ClothOptimizer>();
-            }
-        }
-    }
 
     [HarmonyPatch(typeof(Piece), "Awake")]
     public static class ClothOptimizer_Piece_Awake_Patch

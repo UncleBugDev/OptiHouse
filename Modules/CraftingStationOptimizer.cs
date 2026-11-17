@@ -7,20 +7,10 @@ using UnityEngine;
 namespace OptiHouse.Modules
 {
     /// <summary>
-    /// Crafting Station Optimizer for OptiHouse.
-    /// Optimizes crafting, smelting, and processing stations in Valheim bases:
-    /// - Smelter, Blast Furnace, Charcoal Kiln, Spinning Wheel, Eitr Refinery (Smelter)
-    /// - Fermenter
-    /// - Cooking Station, Iron Cooking Station, Cauldron (CookingStation)
-    /// - Workbench, Forge, Stonecutter, Artisan Table, Black Forge, Galdr Table (CraftingStation)
-    /// - Windmill
-    /// 
-    /// When distance > StationCullDistance (default 18m), pauses attached ParticleSystems
-    /// (sparks, bubbling liquids, grinding particles, smoke bursts) and looping ambient AudioSources.
-    /// Completely preserves core game logic, fuel consumption, cooking timers, and item yields.
-    /// Smoothly restores full visuals and sound as the player approaches.
-    /// 
-    /// Exposes public counters for HUD: TotalStations, CulledStations.
+    /// Crafting Station & Beehive Optimizer for OptiHouse.
+    /// Pauses particle emitters and looping ambient audio on distant Smelters, Blast Furnaces,
+    /// Kilns, Fermenters, Cooking Stations, Workbenches, Windmills, and Beehives beyond StationCullDistance.
+    /// Core smelting, fermentation, honey production, and cooking timers run 100% untouched.
     /// </summary>
     public class CraftingStationOptimizer : MonoBehaviour
     {
@@ -53,10 +43,6 @@ namespace OptiHouse.Modules
         private void Awake()
         {
             Instance = this;
-        }
-
-        private void Start()
-        {
             ScanExistingStations();
         }
 
@@ -102,9 +88,6 @@ namespace OptiHouse.Modules
             EvaluateStations();
         }
 
-        /// <summary>
-        /// Scans scene for any stations initialized before the plugin or during scene loading.
-        /// </summary>
         public static void ScanExistingStations()
         {
             try
@@ -114,6 +97,7 @@ namespace OptiHouse.Modules
                 foreach (var s in FindObjectsByType<CookingStation>(FindObjectsSortMode.None)) RegisterStation(s);
                 foreach (var s in FindObjectsByType<CraftingStation>(FindObjectsSortMode.None)) RegisterStation(s);
                 foreach (var s in FindObjectsByType<Windmill>(FindObjectsSortMode.None)) RegisterStation(s);
+                foreach (var s in FindObjectsByType<Beehive>(FindObjectsSortMode.None)) RegisterStation(s);
             }
             catch (Exception ex)
             {
@@ -124,26 +108,20 @@ namespace OptiHouse.Modules
             }
         }
 
-        /// <summary>
-        /// Registers a crafting/processing station for distance-based culling.
-        /// </summary>
         public static void RegisterStation(Component station)
         {
-            if (station == null) return;
+            if (!OptimizationHelpers.IsValidWorldObject(station)) return;
 
             int id = station.GetInstanceID();
-            if (_stationLookup.ContainsKey(id))
-            {
-                return;
-            }
+            if (_stationLookup.ContainsKey(id)) return;
 
             var entry = new TrackedStation
             {
                 InstanceId = id,
                 Station = station,
                 Transform = station.transform,
-                ParticleSystems = station.GetComponentsInChildren<ParticleSystem>(true),
-                AudioSources = station.GetComponentsInChildren<AudioSource>(true),
+                ParticleSystems = station.GetComponentsInChildren<ParticleSystem>(true) ?? Array.Empty<ParticleSystem>(),
+                AudioSources = station.GetComponentsInChildren<AudioSource>(true) ?? Array.Empty<AudioSource>(),
                 IsCulled = false
             };
 
@@ -152,9 +130,6 @@ namespace OptiHouse.Modules
             TotalStations = _stations.Count;
         }
 
-        /// <summary>
-        /// Unregisters a station when dismantled or destroyed.
-        /// </summary>
         public static void UnregisterStation(Component station)
         {
             if (station == null) return;
@@ -162,7 +137,6 @@ namespace OptiHouse.Modules
             int id = station.GetInstanceID();
             if (_stationLookup.TryGetValue(id, out var entry))
             {
-                // Restore any paused systems before unregistering
                 RestoreStation(entry);
                 _stationLookup.Remove(id);
                 _stations.Remove(entry);
@@ -170,12 +144,8 @@ namespace OptiHouse.Modules
             }
         }
 
-        /// <summary>
-        /// Evaluates all registered stations, culling distant particles and looping audio.
-        /// </summary>
         private void EvaluateStations()
         {
-            // 1. Clean up destroyed or dismantled stations
             for (int i = _stations.Count - 1; i >= 0; i--)
             {
                 var entry = _stations[i];
@@ -193,28 +163,14 @@ namespace OptiHouse.Modules
                 return;
             }
 
-            Vector3 refPos = Vector3.zero;
-            bool hasRefPos = false;
-
-            if (Player.m_localPlayer != null)
-            {
-                refPos = Player.m_localPlayer.transform.position;
-                hasRefPos = true;
-            }
-            else if (Camera.main != null)
-            {
-                refPos = Camera.main.transform.position;
-                hasRefPos = true;
-            }
-
-            if (!hasRefPos)
+            if (!OptimizationHelpers.TryGetReferencePosition(out Vector3 refPos))
             {
                 return;
             }
 
             float cullDist = ModConfig.StationCullDistance != null
                 ? Mathf.Max(5f, ModConfig.StationCullDistance.Value)
-                : 18f;
+                : 20f;
 
             float cullDistSq = cullDist * cullDist;
             float uncullDist = Mathf.Max(0f, cullDist - HysteresisMargin);
@@ -225,29 +181,28 @@ namespace OptiHouse.Modules
             for (int i = 0; i < _stations.Count; i++)
             {
                 var entry = _stations[i];
+                if (!entry.Station.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
                 float sqrDist = (entry.Transform.position - refPos).sqrMagnitude;
 
                 if (sqrDist > cullDistSq)
                 {
-                    // Distant: cull particle emission & pause looping ambient audio
                     CullStation(entry);
                     culledCount++;
                 }
                 else if (sqrDist < uncullDistSq)
                 {
-                    // Near: restore full visual particles & audio
                     if (entry.IsCulled)
                     {
                         RestoreStation(entry);
                     }
                 }
-                else
+                else if (entry.IsCulled)
                 {
-                    // In hysteresis zone: retain previous state
-                    if (entry.IsCulled)
-                    {
-                        culledCount++;
-                    }
+                    culledCount++;
                 }
             }
 
@@ -258,7 +213,6 @@ namespace OptiHouse.Modules
         {
             entry.IsCulled = true;
 
-            // 1. Pause active ParticleSystems
             for (int i = 0; i < entry.ParticleSystems.Length; i++)
             {
                 var ps = entry.ParticleSystems[i];
@@ -269,7 +223,6 @@ namespace OptiHouse.Modules
                 }
             }
 
-            // 2. Pause looping ambient AudioSources
             for (int i = 0; i < entry.AudioSources.Length; i++)
             {
                 var audio = entry.AudioSources[i];
@@ -285,7 +238,6 @@ namespace OptiHouse.Modules
         {
             entry.IsCulled = false;
 
-            // 1. Resume paused ParticleSystems
             foreach (var ps in entry.PausedParticles)
             {
                 if (ps != null && ps.isPaused)
@@ -295,7 +247,6 @@ namespace OptiHouse.Modules
             }
             entry.PausedParticles.Clear();
 
-            // 2. Resume paused AudioSources
             foreach (var audio in entry.PausedAudio)
             {
                 if (audio != null)
@@ -306,9 +257,6 @@ namespace OptiHouse.Modules
             entry.PausedAudio.Clear();
         }
 
-        /// <summary>
-        /// Restores all tracked stations to full un-culled operation.
-        /// </summary>
         public static void RestoreAllStations()
         {
             for (int i = 0; i < _stations.Count; i++)
@@ -321,25 +269,6 @@ namespace OptiHouse.Modules
 
     #region Harmony Patches
 
-    /// <summary>
-    /// Auto-attach CraftingStationOptimizer to OptiHousePlugin GameObject on Awake.
-    /// </summary>
-    [HarmonyPatch(typeof(OptiHousePlugin), "Awake")]
-    public static class CraftingStationOptimizer_Plugin_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(OptiHousePlugin __instance)
-        {
-            if (__instance != null && __instance.gameObject.GetComponent<CraftingStationOptimizer>() == null)
-            {
-                __instance.gameObject.AddComponent<CraftingStationOptimizer>();
-            }
-        }
-    }
-
-    /// <summary>
-    /// Registers Smelter (Smelter, Blast Furnace, Kiln, Spinning Wheel, Eitr Refinery) on Awake.
-    /// </summary>
     [HarmonyPatch(typeof(Smelter), "Awake")]
     public static class Smelter_Awake_Patch
     {
@@ -360,9 +289,6 @@ namespace OptiHouse.Modules
         }
     }
 
-    /// <summary>
-    /// Registers Fermenter on Awake.
-    /// </summary>
     [HarmonyPatch(typeof(Fermenter), "Awake")]
     public static class Fermenter_Awake_Patch
     {
@@ -383,9 +309,6 @@ namespace OptiHouse.Modules
         }
     }
 
-    /// <summary>
-    /// Registers CookingStation (Wooden Cooking Station, Iron Cooking Station, Cauldron) on Awake.
-    /// </summary>
     [HarmonyPatch(typeof(CookingStation), "Awake")]
     public static class CookingStation_Awake_Patch
     {
@@ -406,9 +329,6 @@ namespace OptiHouse.Modules
         }
     }
 
-    /// <summary>
-    /// Registers CraftingStation (Workbench, Forge, Stonecutter, Artisan Table, etc.) on Start.
-    /// </summary>
     [HarmonyPatch(typeof(CraftingStation), "Start")]
     public static class CraftingStation_Start_Patch
     {
@@ -429,14 +349,21 @@ namespace OptiHouse.Modules
         }
     }
 
-    /// <summary>
-    /// Registers Windmill on Start.
-    /// </summary>
     [HarmonyPatch(typeof(Windmill), "Start")]
     public static class Windmill_Start_Patch
     {
         [HarmonyPostfix]
         public static void Postfix(Windmill __instance)
+        {
+            CraftingStationOptimizer.RegisterStation(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(Beehive), "Awake")]
+    public static class Beehive_Awake_Patch
+    {
+        [HarmonyPostfix]
+        public static void Postfix(Beehive __instance)
         {
             CraftingStationOptimizer.RegisterStation(__instance);
         }

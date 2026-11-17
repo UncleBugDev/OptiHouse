@@ -1,8 +1,8 @@
 {
   "name": "OptiHouse",
-  "version_number": "1.4.1",
+  "version_number": "1.5.0",
   "website_url": "https://github.com/UncleBugDev/OptiHouse",
-  "description": "High-performance client-side base optimization mod for Valheim. Fixes FPS drops in mega-bases via dynamic lighting shadow limits, particle suppression, indoor smoke physics throttling, and structural shadow culling.",
+  "description": "High-performance client-side base optimization mod for Valheim. Fixes FPS drops in mega-bases via native point-light & shadow limits, WearNTear Ashlands/cover loop skips, smoke/VFX throttling, interior occlusion, and prop LOD.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2202"
   ]

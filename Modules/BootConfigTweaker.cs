@@ -4,22 +4,15 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using BepInEx;
-using HarmonyLib;
-using OptiHouse.Configuration;
 using UnityEngine;
+using OptiHouse.Configuration;
 
 namespace OptiHouse.Modules
 {
     /// <summary>
-    /// Multi-Threaded Engine & Graphics Jobs Boot Config Tweaker for OptiHouse.
-    /// 
-    /// Inspects and optimizes the Unity engine configuration (valheim_Data/boot.config).
-    /// Injects gfx-enable-gfx-jobs=1 and gfx-enable-native-gfx-jobs=1 to allow Unity's
-    /// rendering pipeline to dispatch graphics jobs across multiple worker threads,
-    /// significantly eliminating main-thread draw call bottlenecks in dense player bases.
-    /// 
-    /// Automatically creates boot.config.bak before modifying the file.
-    /// Exposes public bool IsGfxJobsActive for diagnostic and HUD reporting.
+    /// Engine Gfx Jobs inspector and opt-in boot.config tweaker for OptiHouse.
+    /// Reads valheim_Data/boot.config to report multi-threaded Gfx Jobs status in HUD.
+    /// Only modifies boot.config when EnableGfxJobsTweak is explicitly enabled (opt-in).
     /// </summary>
     public static class BootConfigTweaker
     {
@@ -30,18 +23,11 @@ namespace OptiHouse.Modules
 
         private static bool _initialized = false;
 
-        /// <summary>
-        /// Scans for valheim_Data/boot.config and applies multi-threaded graphics jobs tweaks if enabled.
-        /// Safe and idempotent: can be called repeatedly without duplicate injections or side effects.
-        /// </summary>
         public static void Initialize()
         {
             ApplyBootConfigTweaks();
         }
 
-        /// <summary>
-        /// Reads valheim_Data/boot.config and injects gfx job optimization flags if missing.
-        /// </summary>
         public static void ApplyBootConfigTweaks()
         {
             if (_initialized)
@@ -55,7 +41,10 @@ namespace OptiHouse.Modules
                 string? configPath = FindBootConfigPath();
                 if (string.IsNullOrEmpty(configPath) || !File.Exists(configPath))
                 {
-                    OptiHousePlugin.Log?.LogWarning($"[BootConfigTweaker] boot.config could not be located via Application.dataPath ({Application.dataPath}). Engine tweak skipped.");
+                    if (ModConfig.EnableLogging != null && ModConfig.EnableLogging.Value)
+                    {
+                        OptiHousePlugin.Log?.LogWarning($"[BootConfigTweaker] boot.config could not be located via Application.dataPath ({Application.dataPath}).");
+                    }
                     return;
                 }
 
@@ -65,27 +54,23 @@ namespace OptiHouse.Modules
                 bool hasGfxJobs = lines.Any(l => l.Trim().Equals("gfx-enable-gfx-jobs=1", StringComparison.OrdinalIgnoreCase));
                 bool hasNativeGfxJobs = lines.Any(l => l.Trim().Equals("gfx-enable-native-gfx-jobs=1", StringComparison.OrdinalIgnoreCase));
 
-                if (hasGfxJobs && hasNativeGfxJobs)
-                {
-                    IsGfxJobsActive = true;
-                    RestartRequired = false;
-                    OptiHousePlugin.Log?.LogInfo("[BootConfigTweaker] Multi-threaded Gfx Jobs (gfx-enable-gfx-jobs=1, gfx-enable-native-gfx-jobs=1) are already configured and active.");
-                    return;
-                }
-
-                // If gfx-enable-gfx-jobs=1 was already present at startup, jobs were active in current engine instance
                 if (hasGfxJobs)
                 {
                     IsGfxJobsActive = true;
                 }
 
-                if (ModConfig.EnableGfxJobsTweak == null || !ModConfig.EnableGfxJobsTweak.Value)
+                if (hasGfxJobs && hasNativeGfxJobs)
                 {
-                    OptiHousePlugin.Log?.LogInfo("[BootConfigTweaker] EnableGfxJobsTweak is false in ModConfig. Skipping injection.");
+                    RestartRequired = false;
                     return;
                 }
 
-                // Safely create backup
+                // Opt-in only: do not mutate external game files unless explicitly enabled
+                if (ModConfig.EnableGfxJobsTweak == null || !ModConfig.EnableGfxJobsTweak.Value)
+                {
+                    return;
+                }
+
                 string backupPath = configPath + ".bak";
                 if (!File.Exists(backupPath))
                 {
@@ -94,7 +79,6 @@ namespace OptiHouse.Modules
                     OptiHousePlugin.Log?.LogInfo($"[BootConfigTweaker] Created engine config backup at: {backupPath}");
                 }
 
-                // Rebuild config lines with flags injected at the top
                 List<string> updatedLines = new List<string>
                 {
                     "gfx-enable-gfx-jobs=1",
@@ -109,7 +93,6 @@ namespace OptiHouse.Modules
                         continue;
                     }
 
-                    // Remove older/contrary values for these specific keys
                     if (trimmed.StartsWith("gfx-enable-gfx-jobs=", StringComparison.OrdinalIgnoreCase) ||
                         trimmed.StartsWith("gfx-enable-native-gfx-jobs=", StringComparison.OrdinalIgnoreCase))
                     {
@@ -123,20 +106,16 @@ namespace OptiHouse.Modules
                 IsGfxJobsActive = true;
                 RestartRequired = true;
 
-                OptiHousePlugin.Log?.LogInfo($"[BootConfigTweaker] Successfully injected multi-threaded Gfx Jobs into {configPath}. A game restart is required for changes to take full effect.");
+                OptiHousePlugin.Log?.LogInfo($"[BootConfigTweaker] Injected multi-threaded Gfx Jobs into {configPath}. Restart required.");
             }
             catch (Exception ex)
             {
-                OptiHousePlugin.Log?.LogError($"[BootConfigTweaker] Failed to evaluate or inject boot.config tweaks: {ex.Message}");
+                OptiHousePlugin.Log?.LogError($"[BootConfigTweaker] Failed to read/update boot.config: {ex.Message}");
             }
         }
 
-        /// <summary>
-        /// Locates boot.config across standard Valheim installation and runtime paths.
-        /// </summary>
         private static string? FindBootConfigPath()
         {
-            // 1. Primary path: Application.dataPath points directly to valheim_Data in standalone builds
             if (!string.IsNullOrEmpty(Application.dataPath))
             {
                 string directPath = Path.Combine(Application.dataPath, "boot.config");
@@ -152,7 +131,6 @@ namespace OptiHouse.Modules
                 }
             }
 
-            // 2. Fallback via BepInEx Paths.GameRootPath
             try
             {
                 string rootPath = Paths.GameRootPath;
@@ -167,10 +145,8 @@ namespace OptiHouse.Modules
             }
             catch
             {
-                // Ignored if Paths.GameRootPath is not initialized yet
             }
 
-            // 3. Fallback via current working directory
             string cwdPath = Path.Combine(Directory.GetCurrentDirectory(), "valheim_Data", "boot.config");
             if (File.Exists(cwdPath))
             {
@@ -180,22 +156,4 @@ namespace OptiHouse.Modules
             return null;
         }
     }
-
-    #region Harmony Patches
-
-    /// <summary>
-    /// Ensures boot.config tweaks are evaluated at earliest plugin startup.
-    /// </summary>
-    [HarmonyPatch(typeof(OptiHousePlugin), "Awake")]
-    public static class BootConfigTweaker_Plugin_Patch
-    {
-        [HarmonyPriority(Priority.First)]
-        [HarmonyPostfix]
-        public static void Postfix()
-        {
-            BootConfigTweaker.Initialize();
-        }
-    }
-
-    #endregion
 }

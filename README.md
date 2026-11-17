@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/UncleBugDev/OptiHouse/releases"><img src="https://img.shields.io/github/v/release/UncleBugDev/OptiHouse?style=for-the-badge&color=007ec6&logo=github" alt="GitHub Release" /></a>
-  <a href="https://thunderstore.io/c/valheim/p/UncleBugDev/OptiHouse/"><img src="https://img.shields.io/badge/Thunderstore-v1.3.0-orange?style=for-the-badge&logo=thunderstore" alt="Thunderstore" /></a>
+  <a href="https://thunderstore.io/c/valheim/p/UncleBugDev/OptiHouse/"><img src="https://img.shields.io/badge/Thunderstore-v1.5.0-orange?style=for-the-badge&logo=thunderstore" alt="Thunderstore" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/Valheim-PC%20%7C%20Steam-red?style=for-the-badge&logo=steam" alt="Platform" />
 </p>
@@ -22,7 +22,8 @@
 Unlike destructive mods that merge or delete GameObjects and corrupt Valheim's persistent ZDO database (`.db` / `.fwl`), **OptiHouse operates 100% on the client presentation layer**:
 - **Zero ZDO modifications:** Pieces are never deleted, baked into new GameObjects, or desynchronized.
 - **Save files remain 100% vanilla:** You can safely install or uninstall OptiHouse at any time with zero impact on your saved worlds.
-- **Hammer Safety:** Equipping a hammer or building tool instantly restores all colliders for pixel-perfect snapping and repairing.
+- **Zero Collider Interference:** Building piece colliders are **never** touched or disabled, guaranteeing 100% `WearNTear.UpdateSupport()` stability.
+- **Hammer Safety:** Equipping a hammer or building tool instantly restores all culled detail renderers for pixel-perfect snapping and repairing.
 
 ---
 
@@ -34,10 +35,11 @@ When hundreds of building pieces, torches, braziers, smoke puffs, tamed animals,
 
 ## 🚀 Key Features & Optimizations
 
-### 💡 1. Dynamic Lighting & Shadow Management (`[Lighting]`)
-- **Point Light Shadow Limiter:** Dynamically tracks light sources around the player and restricts active shadow-casting point lights to the closest lights (default: 6). Excess lights continue to illuminate surfaces smoothly with shadows set to `None`, drastically reducing shadow map render passes.
-- **Torch & Sconce Shadow Stripping:** Wall torches, sconces, and standing braziers maintain their ambient glow while stripping heavy real-time shadows.
-- **Interior Light Distance Culling:** Intelligently reduces rendering overhead for distant small light sources within large settlements.
+### 💡 1. Dynamic Lighting, Shadow & Flicker Management (`[Lighting]`)
+- **Native Forward Point-Light Cap (`LightLod.m_lightLimit`):** Uses Valheim's built-in priority fading system to cap simultaneous active point lights (default: 28), cutting up to 50% of redundant `ForwardAdd` render passes in torch-lit castles.
+- **Point Light Shadow Limiter:** Restricts active shadow-casting point lights to the closest sources (default: 6).
+- **Torch & Sconce Shadow Stripping + `CheckEnv` Throttle:** Strips heavy dynamic shadows from small torches/sconces and throttles redundant `Fireplace.CheckEnv` terrain raycasts from 4s to 20s.
+- **Distant `LightFlicker` Culling:** Pauses CPU flicker math beyond 22m (automatically defers to VPO if installed).
 
 ### 💨 2. Indoor Smoke Physics & Puff Throttling (`[Smoke]`)
 - **Smoke Puff Hard Cap:** Enforces a configurable cap on simultaneous active smoke particles (default: 25 vs vanilla's 100+). Prevents massive chimney bottlenecks and physics lag while keeping hearths functional.
@@ -49,36 +51,36 @@ When hundreds of building pieces, torches, braziers, smoke puffs, tamed animals,
 - **Demolition Dust Suppression:** Suppresses heavy debris chunk bursts and wood/stone dust particle spam when tearing down or rebuilding structures.
 - **Zero Risk to Gameplay:** Does not affect item drops, resource yields, or damage indicators.
 
-### 🏛️ 4. Structural Physics & Mesh Optimizations (`[Structural]`)
-- **WearNTear Weather Cover Throttling:** Throttles redundant `UpdateCover` sky raycast checks on undamaged, static building pieces by 3–5x. Drastically reduces main thread CPU frame times in dense bases.
-- **Small Piece Shadow Culling:** Automatically disables shadow-casting on small structural pieces (short beams <= 2m, iron bars, decorative poles) beyond a configurable distance (default: 15m). Massive bases look identical from a distance while saving hundreds of shadow draw calls.
-- **100% Structural Support Guarantee:** OptiHouse strictly preserves all physics colliders on all building pieces, ensuring Valheim's internal `WearNTear.UpdateSupport()` stability graph is never compromised. No buildings or roofs will ever collapse.
+### 🏛️ 4. Structural CPU & Shadow Optimizations (`[Structural]` & `[Structural Detail LOD]`)
+- **Non-Ashlands `WearNTear` Loop Skip:** Skips `WearNTearUpdater`'s wasted per-second `UpdateAshlandsMaterialValues` iteration across non-Ashlands base pieces when burn/lava timers are zero.
+- **WearNTear Weather Cover Throttling:** Real-time throttles redundant `UpdateCover` sky raycast checks during storms on undamaged building pieces.
+- **Small Prop Shadow Culling & Ornamental Detail LOD:** Disables shadows on distant small props (>18m) and culls purely ornamental micro-pieces (crosses, carvings, dragonheads, brackets, 1m poles) beyond 38m while keeping **100% of walls, floors, pillars, and roof/ridge tiles solid**.
+- **100% Structural Support Guarantee:** OptiHouse strictly preserves all physics colliders on all building pieces.
 
-### 🚪 5. Interior Occlusion Culling (`[Interior Occlusion]`)
-- **Enclosed Base Occlusion:** Valheim lacks indoor occlusion culling, meaning indoor furniture, chests, and decor inside a closed building are still drawn even when standing outside. OptiHouse detects when the player is outside shelter and dynamically suppresses renderers of distant interior items beyond 18m.
-- **Instant Restore:** Instantly restores all indoor renderers the moment you approach an entrance or enter shelter. Exterior walls and roofs always remain 100% rendered.
+### 🚪 5. Smart Interior Occlusion Culling (`[Interior Occlusion]`)
+- **Enclosed Furniture Occlusion:** Suppresses renderers of enclosed distant furniture, chests, and decor beyond 26m while **never** hiding walls, roofs, fireplaces, or light fixtures. Snapshots original renderer states for glitch-free restoration.
 
-### ⚡ 6. Multi-Threaded Gfx Jobs Engine Tweak (`[General]`)
-- **boot.config Tweaks:** Unity's engine supports multi-threaded graphics rendering jobs (`gfx-enable-gfx-jobs=1`, `gfx-enable-native-gfx-jobs=1`) which offloads draw call submission across CPU cores. OptiHouse automatically configures this in `valheim_Data/boot.config` with a safe backup.
+### ⚡ 6. Opt-In Engine Gfx Jobs Tweak (`[General]`)
+- **boot.config Tweaks (Opt-In):** Vanilla Valheim already enables `gfx-enable-gfx-jobs=1`. OptiHouse leaves `boot.config` untouched by default; enabling `EnableGfxJobsTweak` opts in to injecting `gfx-enable-native-gfx-jobs=1` with a `.bak` backup.
 
 ### 🚩 7. Cloth & Banner Physics Culling (`[Cloth & Banners]`)
 - **Unity Cloth Solver Culling:** Dynamically pauses heavy CPU vertex physics solvers on distant banners, flags, and tapestries beyond the culling distance (default: 15m).
 - **Hysteresis Smoothing:** 3m hysteresis margin prevents rapid toggling when moving near the boundary; simulations smoothly resume when approaching.
 
 ### 📦 8. Storage & Trophy Stand Throttling (`[Storage & ItemStands]`)
-- **Item & Armor Stand Throttling:** Drastically cuts lag in dense storage halls and armories. Mounted glowing weapons (Frostner, Mistwalker, torches) and trophies pause particle systems and disable dynamic point lights when beyond the culling threshold (default: 12m).
+- **Item & Armor Stand Throttling:** Mounted glowing weapons (Frostner, Mistwalker, torches) and trophies pause particle systems and disable dynamic point lights when beyond the culling threshold (default: 15m), safely restoring original states up close.
 - **Instant Restore:** Automatically restores full visual brilliance when walking up to inspect items or stands.
 
 ### 🐗 9. Farm Animal LOD & AI Throttling (`[Farm Animals]`)
-- **Tamed Animal Animator LOD:** Switches animators on tamed boars, wolves, chickens, and loxes in pens to efficient LOD culling modes beyond distance (default: 15m).
-- **Idle AI Throttling:** Throttles non-critical pathfinding and idle queries for distant pen animals without interfering with breeding, taming, or defense mechanics.
+- **Tamed Animal Animator LOD:** Switches animators on distant tamed boars, wolves, chickens, and loxes in pens to `CullUpdateTransforms` beyond distance (default: 18m).
+- **Idle AI Throttling:** Safely throttles stationary, calm pen animal AI from 20 Hz to 5 Hz without interfering with walking, breeding, taming, or combat defense.
 
-### 🔨 10. Crafting Station Audio & Particle Culling (`[Crafting Stations]`)
-- **Processing Station Culling:** Pauses heavy particle emitters (sparks, bubbling liquids, grinding dust) and looping ambient sound sources on smelters, blast furnaces, kilns, cauldrons, fermenters, spinning wheels, and windmills beyond distance (default: 18m).
+### 🔨 10. Crafting Station & Beehive Culling (`[Crafting Stations]`)
+- **Processing Station & Beehive Culling:** Pauses heavy particle emitters and looping ambient sound sources on smelters, blast furnaces, kilns, cauldrons, fermenters, spinning wheels, windmills, and beehives beyond distance (default: 20m).
 
 ### 📊 11. Real-Time Benchmark HUD Overlay (`[HUD & Benchmark]`)
 - **In-Game Diagnostics (`Shift+F7`):** High-contrast, flicker-free IMGUI overlay displaying real-time FPS, rolling Average FPS, true 1% Low framerate, and frame time in milliseconds.
-- **Live Base Diagnostics:** Displays total base pieces, shadow lights, smoke puffs, banner cloths, item stands, tamed animals, crafting stations, interior culled items, detail pieces LOD, ground loot consolidation, and multi-threaded gfx jobs engine status.
+- **Live Base Diagnostics:** Displays total base pieces, active/capped point lights, shadow lights, prop shadow culling, WearNTear/Fireplace CPU loop skips, smoke puffs, banner cloths, item stands, tamed animals, stations & beehives, interior occlusion, detail LOD, sleeping ground loot, and Gfx Jobs status.
 - **Status Indicator:** Shows live `[OptiHouse: ACTIVE]` (green) or `[OptiHouse: DISABLED]` (red) status.
 - **Customizable:** Change hotkey, anchor position (`TopLeft`, `TopRight`, `BottomLeft`, `BottomRight`), and text size.
 
@@ -97,46 +99,53 @@ A configuration file is generated at `BepInEx/config/com.unclebug.optihouse.cfg`
 | **[1. General]** | `ToggleHotkey` | `F7` | Hotkey to toggle optimizations on the fly. |
 | **[1. General]** | `ShowNotificationOnToggle` | `true` | Show on-screen MessageHud notification when toggling. |
 | **[1. General]** | `EnableLogging` | `false` | Enable detailed diagnostic logging in BepInEx console. |
-| **[1. General]** | `EnableGfxJobsTweak` | `true` | Enable multi-threaded graphics rendering job tweaks in boot.config. |
+| **[1. General]** | `EnableGfxJobsTweak` | `false` | Opt-in: inject `gfx-enable-native-gfx-jobs=1` into `boot.config`. |
 | **[2. Lighting]** | `EnableLightOptimization` | `true` | Enable dynamic base lighting and shadow management. |
+| **[2. Lighting]** | `MaxActivePointLights` | `28` | Max active Forward-rendered point lights (`LightLod.m_lightLimit`, `0` = unlimited). |
 | **[2. Lighting]** | `MaxShadowCastingLights` | `6` | Maximum number of point lights allowed to cast real-time shadows near the player (0–32). |
 | **[2. Lighting]** | `DisableTorchShadows` | `true` | Disable shadow casting on small wall torches and sconces. |
 | **[2. Lighting]** | `LightCullDistance` | `45.0` | Maximum distance at which small interior lights are actively processed (meters). |
+| **[2. Lighting]** | `ThrottleFireplaceEnvChecks` | `true` | Throttle `Fireplace.CheckEnv` terrain raycasts from 4s to 20s. |
+| **[2. Lighting]** | `CullDistantLightFlicker` | `true` | Skip CPU `LightFlicker` trig updates beyond 22m (defers to VPO). |
 | **[3. VFX]** | `EnableVfxOptimization` | `true` | Enable particle and visual effect throttling. |
-| **[3. VFX]** | `EnableFastParticleFade` | `true` | Accelerate particle dissipation so dust, sparks, debris, and smoke vanish quickly. |
-| **[3. VFX]** | `ParticleLifetimeMultiplier` | `0.35` | Multiplier for particle lifetime (0.35 = particles fade ~3x faster, no lingering clouds). |
-| **[3. VFX]** | `MaxParticleLifetimeSeconds` | `2.0` | Maximum seconds any temporary VFX or debris particle can exist on screen. |
+| **[3. VFX]** | `EnableFastParticleFade` | `true` | Accelerate particle dissipation cleanly once per effect. |
+| **[3. VFX]** | `ParticleLifetimeMultiplier` | `0.45` | Multiplier for temporary particle lifetime. |
+| **[3. VFX]** | `MaxParticleLifetimeSeconds` | `2.5` | Maximum seconds any temporary effect burst can exist. |
 | **[3. VFX]** | `ParticleSimulationSpeed` | `1.5` | Speed multiplier for particle animations so dust and sparks disperse rapidly. |
 | **[3. VFX]** | `SuppressCultivationParticles` | `true` | Suppress heavy particle bursts when hoeing or cultivating ground. |
-| **[3. VFX]** | `SuppressDestructionParticles` | `true` | Suppress massive dust/debris spam when breaking pieces. |
-| **[3. VFX]** | `VfxThrottlingDistance` | `30.0` | Distance beyond which non-critical ambient particles are throttled. |
+| **[3. VFX]** | `SuppressDestructionParticles` | `true` | Suppress massive building demolition dust/debris spam. |
+| **[3. VFX]** | `VfxThrottlingDistance` | `30.0` | Distance beyond which ambient dust/sparks/ash particles are throttled. |
 | **[4. Smoke]** | `EnableSmokeOptimization` | `true` | Enable indoor smoke puff and physics optimization. |
 | **[4. Smoke]** | `MaxActiveSmokePuffs` | `25` | Hard limit for simultaneous active smoke puffs in base areas. |
-| **[4. Smoke]** | `SmokeLifetimeMultiplier` | `0.35` | Multiplier for chimney and hearth smoke puff lifetime (dissolves quickly). |
-| **[4. Smoke]** | `ThrottleSmokeRaycasts` | `true` | Throttle indoor ceiling collision raycasts for smoke puffs. |
+| **[4. Smoke]** | `SmokeLifetimeMultiplier` | `0.4` | Multiplier for chimney and hearth smoke puff lifetime. |
+| **[4. Smoke]** | `ThrottleSmokeRaycasts` | `true` | Throttle indoor ceiling collision checks for smoke puffs. |
 | **[4. Smoke]** | `DisableSmokeRendering` | `false` | Disable smoke particle visuals while keeping fire/comfort mechanics. |
 | **[5. Structural]** | `EnableStructuralOptimization` | `true` | Enable structural piece shadow and CPU raycast optimizations. |
-| **[5. Structural]** | `EnableWearNTearThrottling` | `true` | Throttle periodic sky/weather raycast checks on intact pieces. |
-| **[5. Structural]** | `WearNTearThrottleInterval` | `10.0` | Seconds between weather protection raycasts for static covered pieces. |
+| **[5. Structural]** | `EnableWearNTearThrottling` | `true` | Throttle periodic rain/weather roof raycasts on intact pieces. |
+| **[5. Structural]** | `WearNTearThrottleInterval` | `10.0` | Real seconds between weather cover raycasts for intact pieces during storms. |
+| **[5. Structural]** | `SkipNonAshlandsMaterialUpdates` | `true` | Skip `WearNTearUpdater` per-second Ashlands shader loops outside Ashlands. |
 | **[5. Structural]** | `EnablePieceShadowCulling` | `true` | Disable shadow casting on small structural elements beyond culling distance. |
-| **[5. Structural]** | `PieceShadowCullDistance` | `15.0` | Distance beyond which small structural pieces stop casting shadows. |
-| **[5. Structural]** | `EnableDecorativeColliderOptimization` | `true` | Temporarily disable colliders on non-walkable decorative pieces. |
-| **[6. Cloth & Banners]** | `EnableClothOptimization` | `true` | Enable distance-based culling for Unity Cloth components on banners/flags. |
-| **[6. Cloth & Banners]** | `BannerClothCullDistance` | `15.0` | Distance beyond which cloth physics simulation is disabled. |
-| **[7. Storage & ItemStands]** | `EnableItemStandOptimization` | `true` | Enable particle and light throttling on distant mounted trophies and weapons. |
-| **[7. Storage & ItemStands]** | `ItemStandCullDistance` | `12.0` | Distance beyond which item stand particles and lights are culled. |
-| **[8. Farm Animals]** | `EnableTamedAnimalLod` | `true` | Enable animator LOD culling and AI throttling for distant tamed animals. |
-| **[8. Farm Animals]** | `TamedAnimalLodDistance` | `15.0` | Distance beyond which tamed animal animators switch to LOD mode. |
-| **[9. Crafting Stations]** | `EnableStationOptimization` | `true` | Enable particle and ambient audio culling on distant crafting stations. |
-| **[9. Crafting Stations]** | `StationCullDistance` | `18.0` | Distance beyond which crafting station idle particles and loops pause. |
+| **[5. Structural]** | `PieceShadowCullDistance` | `18.0` | Distance beyond which small structural pieces stop casting shadows. |
+| **[6. Cloth & Banners]** | `EnableClothOptimization` | `true` | Pause Unity Cloth physics on distant banners/flags. |
+| **[6. Cloth & Banners]** | `BannerClothCullDistance` | `16.0` | Distance beyond which cloth physics simulation is disabled. |
+| **[7. Storage & ItemStands]** | `EnableItemStandOptimization` | `true` | Pause particles and lights on distant mounted trophies and weapons. |
+| **[7. Storage & ItemStands]** | `ItemStandCullDistance` | `15.0` | Distance beyond which item stand particles and lights are culled. |
+| **[8. Farm Animals]** | `EnableTamedAnimalLod` | `true` | Enable animator LOD culling and idle AI throttling for distant tamed animals. |
+| **[8. Farm Animals]** | `TamedAnimalLodDistance` | `18.0` | Distance beyond which tamed animal animators switch to LOD mode. |
+| **[9. Crafting Stations]** | `EnableStationOptimization` | `true` | Pause particles and looping audio on distant crafting stations & beehives. |
+| **[9. Crafting Stations]** | `StationCullDistance` | `20.0` | Distance beyond which station idle particles and audio pause. |
 | **[10. HUD & Benchmark]** | `EnableBenchmarkHUD` | `true` | Enable the real-time in-game benchmark and diagnostics overlay. |
 | **[10. HUD & Benchmark]** | `BenchmarkHudHotkey` | `F7` | Hotkey to toggle the benchmark HUD overlay. |
 | **[10. HUD & Benchmark]** | `BenchmarkHudRequireShift` | `true` | Require holding Shift with hotkey (Shift+F7) to toggle the benchmark HUD. |
 | **[10. HUD & Benchmark]** | `HudTextSize` | `13` | Font size for benchmark HUD overlay text (10–24). |
 | **[10. HUD & Benchmark]** | `HudPosition` | `TopLeft` | Screen anchor position (`TopLeft`, `TopRight`, `BottomLeft`, `BottomRight`). |
-| **[11. Interior Occlusion]** | `EnableInteriorCulling` | `true` | Enable interior piece and furniture culling when outside base shelter. |
-| **[11. Interior Occlusion]** | `InteriorCullDistance` | `18.0` | Distance (in meters) beyond which interior pieces are culled outside shelter. |
+| **[11. Interior Occlusion]** | `EnableInteriorCulling` | `true` | Enable enclosed interior furniture/chest culling beyond distance. |
+| **[11. Interior Occlusion]** | `InteriorCullDistance` | `26.0` | Distance (in meters) beyond which enclosed furniture is culled. |
+| **[11. Interior Occlusion]** | `EnableSmartInteriorCulling` | `true` | Keep distant enclosed rooms culled even when inside another room. |
 | **[12. Terrain Helpers]** | `EnableTerrainSanityCheck` | `true` | Detect legacy uncompressed terrain modification stacks in base zones. |
+| **[13. Item Drops & Loot]** | `EnableItemDropOptimization` | `true` | Sleep settled ground item Rigidbodies and pause distant sparkles. |
+| **[14. Structural Detail LOD]** | `EnableDetailPieceLOD` | `true` | Cull ornamental micro-pieces (carvings, crosses, 1m poles) beyond distance. |
+| **[14. Structural Detail LOD]** | `DetailPieceCullDistance` | `38.0` | Distance beyond which ornamental micro-details are culled. |
 
 ---
 
@@ -148,7 +157,7 @@ A configuration file is generated at `BepInEx/config/com.unclebug.optihouse.cfg`
 
 ### Manual Installation
 1. Ensure [BepInExPack Valheim](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/) is installed.
-2. Download `OptiHouse_v1.3.0.zip` from Thunderstore or GitHub Releases.
+2. Download `OptiHouse_v1.5.0.zip` from Thunderstore or GitHub Releases.
 3. Extract `OptiHouse.dll` into your Valheim directory under `BepInEx/plugins/UncleBugDev-OptiHouse/`.
 4. Launch the game!
 

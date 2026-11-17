@@ -22,9 +22,12 @@ namespace OptiHouse.Configuration
 
         // 2. Lighting
         public static ConfigEntry<bool> EnableLightOptimization = null!;
+        public static ConfigEntry<int> MaxActivePointLights = null!;
         public static ConfigEntry<int> MaxShadowCastingLights = null!;
         public static ConfigEntry<bool> DisableTorchShadows = null!;
         public static ConfigEntry<float> LightCullDistance = null!;
+        public static ConfigEntry<bool> ThrottleFireplaceEnvChecks = null!;
+        public static ConfigEntry<bool> CullDistantLightFlicker = null!;
 
         // 3. VFX
         public static ConfigEntry<bool> EnableVfxOptimization = null!;
@@ -47,9 +50,9 @@ namespace OptiHouse.Configuration
         public static ConfigEntry<bool> EnableStructuralOptimization = null!;
         public static ConfigEntry<bool> EnableWearNTearThrottling = null!;
         public static ConfigEntry<float> WearNTearThrottleInterval = null!;
+        public static ConfigEntry<bool> SkipNonAshlandsMaterialUpdates = null!;
         public static ConfigEntry<bool> EnablePieceShadowCulling = null!;
         public static ConfigEntry<float> PieceShadowCullDistance = null!;
-        public static ConfigEntry<bool> EnableDecorativeColliderOptimization = null!;
 
         // 6. Cloth & Banners
         public static ConfigEntry<bool> EnableClothOptimization = null!;
@@ -84,8 +87,6 @@ namespace OptiHouse.Configuration
 
         // 13. Item Drops & Loot Clutter
         public static ConfigEntry<bool> EnableItemDropOptimization = null!;
-        public static ConfigEntry<bool> EnableAutoStackNearbyItems = null!;
-        public static ConfigEntry<float> AutoStackRadius = null!;
         public static ConfigEntry<bool> EnableDroppedItemPhysicsSleep = null!;
         public static ConfigEntry<float> DroppedItemVfxCullDistance = null!;
 
@@ -96,7 +97,7 @@ namespace OptiHouse.Configuration
 
         public static void Init(ConfigFile config)
         {
-            // [General]
+            // [1. General]
             MasterOptimizationEnabled = config.Bind(
                 "1. General",
                 "MasterOptimizationEnabled",
@@ -128,16 +129,26 @@ namespace OptiHouse.Configuration
             EnableGfxJobsTweak = config.Bind(
                 "1. General",
                 "EnableGfxJobsTweak",
-                true,
-                new ConfigDescription("Enables multi-threaded graphics rendering job tweaks in boot.config (gfx-enable-gfx-jobs=1, gfx-enable-native-gfx-jobs=1). Requires game restart to take effect.")
+                false,
+                new ConfigDescription("Opt-in: injects gfx-enable-native-gfx-jobs=1 into valheim_Data/boot.config (creates boot.config.bak). Requires game restart.")
             );
 
-            // [Lighting]
+            // [2. Lighting]
             EnableLightOptimization = config.Bind(
                 "2. Lighting",
                 "EnableLightOptimization",
                 true,
-                new ConfigDescription("Enable dynamic point light shadow budget and torch shadow optimization.")
+                new ConfigDescription("Enable dynamic point light caps, shadow budget, flicker culling, and fireplace raycast throttling.")
+            );
+
+            MaxActivePointLights = config.Bind(
+                "2. Lighting",
+                "MaxActivePointLights",
+                28,
+                new ConfigDescription(
+                    "Maximum active point lights via LightLod.m_lightLimit (0 = vanilla unlimited). Drastically cuts Forward-rendering multi-pass draw calls in torch-lit bases.",
+                    new AcceptableValueRange<int>(0, 128)
+                )
             );
 
             MaxShadowCastingLights = config.Bind(
@@ -162,12 +173,26 @@ namespace OptiHouse.Configuration
                 "LightCullDistance",
                 45.0f,
                 new ConfigDescription(
-                    "Distance (in meters) at which small interior base lights are culled.",
+                    "Distance (in meters) at which small interior base lights fade out.",
                     new AcceptableValueRange<float>(10f, 100f)
                 )
             );
 
-            // [VFX]
+            ThrottleFireplaceEnvChecks = config.Bind(
+                "2. Lighting",
+                "ThrottleFireplaceEnvChecks",
+                true,
+                new ConfigDescription("Throttle periodic Fireplace.CheckEnv terrain/cover physics raycasts from 4s to 20s on settled torches and hearths.")
+            );
+
+            CullDistantLightFlicker = config.Bind(
+                "2. Lighting",
+                "CullDistantLightFlicker",
+                true,
+                new ConfigDescription("Pause CPU LightFlicker sin/cos & transform jitter on lights beyond 22m (automatically defers to VPO if VPO is active).")
+            );
+
+            // [3. VFX]
             EnableVfxOptimization = config.Bind(
                 "3. VFX",
                 "EnableVfxOptimization",
@@ -186,7 +211,7 @@ namespace OptiHouse.Configuration
                 "3. VFX",
                 "SuppressDestructionParticles",
                 true,
-                new ConfigDescription("Suppress heavy debris chunk bursts and wood/stone dust particle spam when demolishing pieces.")
+                new ConfigDescription("Suppress heavy debris chunk bursts and wood/stone dust particle spam when demolishing building pieces.")
             );
 
             VfxThrottlingDistance = config.Bind(
@@ -203,25 +228,25 @@ namespace OptiHouse.Configuration
                 "3. VFX",
                 "EnableFastParticleFade",
                 true,
-                new ConfigDescription("Accelerates the dissipation of particles (debris, dust, smoke, sparks) so they vanish quickly.")
+                new ConfigDescription("Accelerates the dissipation of temporary particles (debris, dust, smoke, sparks) once per effect.")
             );
 
             ParticleLifetimeMultiplier = config.Bind(
                 "3. VFX",
                 "ParticleLifetimeMultiplier",
-                0.35f,
+                0.45f,
                 new ConfigDescription(
-                    "Multiplier for particle lifetimes. 0.35 = particles live only 35% of their normal duration and fade out ~3x faster.",
-                    new AcceptableValueRange<float>(0.1f, 1.0f)
+                    "Multiplier for temporary particle lifetimes.",
+                    new AcceptableValueRange<float>(0.15f, 1.0f)
                 )
             );
 
             MaxParticleLifetimeSeconds = config.Bind(
                 "3. VFX",
                 "MaxParticleLifetimeSeconds",
-                2.0f,
+                2.5f,
                 new ConfigDescription(
-                    "Hard cap in seconds for the maximum lifetime of any temporary particle effect or demolition debris.",
+                    "Hard cap in seconds for the maximum lifetime of temporary effect bursts.",
                     new AcceptableValueRange<float>(0.5f, 10.0f)
                 )
             );
@@ -231,17 +256,17 @@ namespace OptiHouse.Configuration
                 "ParticleSimulationSpeed",
                 1.5f,
                 new ConfigDescription(
-                    "Speed multiplier for particle animations. Higher values make dust, smoke, and sparks disperse and dissolve quickly.",
+                    "Speed multiplier for particle animations.",
                     new AcceptableValueRange<float>(1.0f, 3.0f)
                 )
             );
 
-            // [Smoke]
+            // [4. Smoke]
             EnableSmokeOptimization = config.Bind(
                 "4. Smoke",
                 "EnableSmokeOptimization",
                 true,
-                new ConfigDescription("Enable indoor smoke puff and physics optimization.")
+                new ConfigDescription("Enable indoor smoke puff cap, spawner raycast caching, and fast fadeout.")
             );
 
             MaxActiveSmokePuffs = config.Bind(
@@ -258,39 +283,39 @@ namespace OptiHouse.Configuration
                 "4. Smoke",
                 "ThrottleSmokeRaycasts",
                 true,
-                new ConfigDescription("Throttle indoor ceiling collision raycasts for rising smoke particles to save CPU cycles.")
+                new ConfigDescription("Throttle indoor ceiling collision checks for SmokeSpawner and fading smoke puffs.")
             );
 
             DisableSmokeRendering = config.Bind(
                 "4. Smoke",
                 "DisableSmokeRendering",
                 false,
-                new ConfigDescription("Disable visual rendering of smoke particles while keeping warmth, fire, and comfort mechanics fully intact.")
+                new ConfigDescription("Disable visual rendering of smoke particles while keeping warmth, fire, and comfort mechanics intact.")
             );
 
             SmokeLifetimeMultiplier = config.Bind(
                 "4. Smoke",
                 "SmokeLifetimeMultiplier",
-                0.35f,
+                0.4f,
                 new ConfigDescription(
-                    "Multiplier for chimney and hearth smoke puff lifetime (TTL). Smoke dissolves quickly instead of lingering indefinitely.",
-                    new AcceptableValueRange<float>(0.1f, 1.0f)
+                    "Multiplier for chimney and hearth smoke puff lifetime (TTL).",
+                    new AcceptableValueRange<float>(0.15f, 1.0f)
                 )
             );
 
-            // [Structural]
+            // [5. Structural]
             EnableStructuralOptimization = config.Bind(
                 "5. Structural",
                 "EnableStructuralOptimization",
                 true,
-                new ConfigDescription("Enable structural piece shadow culling and WearNTear raycast throttling.")
+                new ConfigDescription("Enable structural piece shadow culling, WearNTear cover throttling, and Ashlands shader loop skipping. Never touches colliders.")
             );
 
             EnableWearNTearThrottling = config.Bind(
                 "5. Structural",
                 "EnableWearNTearThrottling",
                 true,
-                new ConfigDescription("Throttle periodic sky/weather raycast checks (UpdateCover) on intact, static building pieces.")
+                new ConfigDescription("Throttle periodic rain/weather roof SphereCastNonAlloc checks (UpdateCover) on intact building pieces.")
             );
 
             WearNTearThrottleInterval = config.Bind(
@@ -298,33 +323,33 @@ namespace OptiHouse.Configuration
                 "WearNTearThrottleInterval",
                 10.0f,
                 new ConfigDescription(
-                    "Seconds between weather protection raycasts for static covered pieces.",
-                    new AcceptableValueRange<float>(2f, 30f)
+                    "Minimum real seconds between weather cover raycasts for intact pieces during rain/storms.",
+                    new AcceptableValueRange<float>(4f, 30f)
                 )
+            );
+
+            SkipNonAshlandsMaterialUpdates = config.Bind(
+                "5. Structural",
+                "SkipNonAshlandsMaterialUpdates",
+                true,
+                new ConfigDescription("Skips WearNTearUpdater's per-second UpdateAshlandsMaterialValues iteration on all non-Ashlands pieces with zero burn/lava timers.")
             );
 
             EnablePieceShadowCulling = config.Bind(
                 "5. Structural",
                 "EnablePieceShadowCulling",
                 true,
-                new ConfigDescription("Disable shadow casting on small structural elements beyond the culling distance.")
+                new ConfigDescription("Disable shadow casting on small structural/prop elements beyond the culling distance.")
             );
 
             PieceShadowCullDistance = config.Bind(
                 "5. Structural",
                 "PieceShadowCullDistance",
-                15.0f,
+                18.0f,
                 new ConfigDescription(
                     "Distance (in meters) beyond which small structural pieces stop casting shadows.",
                     new AcceptableValueRange<float>(5f, 50f)
                 )
-            );
-
-            EnableDecorativeColliderOptimization = config.Bind(
-                "5. Structural",
-                "EnableDecorativeColliderOptimization",
-                true,
-                new ConfigDescription("Disable PhysX colliders on non-walkable decorative structural pieces (cross beams, ridge caps, trim elevated > 3.5m) to reduce physics scene query load. Automatically restores colliders when hammer or building tool is equipped.")
             );
 
             // [6. Cloth & Banners]
@@ -332,13 +357,13 @@ namespace OptiHouse.Configuration
                 "6. Cloth & Banners",
                 "EnableClothOptimization",
                 true,
-                new ConfigDescription("Enable distance-based culling for Unity Cloth components on banners, flags, and tapestries to stop CPU physics simulations.")
+                new ConfigDescription("Pause Unity Cloth vertex physics simulation on distant banners, flags, and tapestries.")
             );
 
             BannerClothCullDistance = config.Bind(
                 "6. Cloth & Banners",
                 "BannerClothCullDistance",
-                15.0f,
+                16.0f,
                 new ConfigDescription(
                     "Distance (in meters) beyond which banner cloth physics solvers are disabled.",
                     new AcceptableValueRange<float>(5f, 60f)
@@ -350,13 +375,13 @@ namespace OptiHouse.Configuration
                 "7. Storage & ItemStands",
                 "EnableItemStandOptimization",
                 true,
-                new ConfigDescription("Enable particle and light throttling on distant mounted trophies and weapons in item stands / armor stands.")
+                new ConfigDescription("Pause particles and lights on distant mounted trophies and weapons in item stands / armor stands.")
             );
 
             ItemStandCullDistance = config.Bind(
                 "7. Storage & ItemStands",
                 "ItemStandCullDistance",
-                12.0f,
+                15.0f,
                 new ConfigDescription(
                     "Distance (in meters) beyond which mounted item particles and light sources are culled.",
                     new AcceptableValueRange<float>(4f, 50f)
@@ -368,15 +393,15 @@ namespace OptiHouse.Configuration
                 "8. Farm Animals",
                 "EnableTamedAnimalLod",
                 true,
-                new ConfigDescription("Enable animator LOD culling and idle AI throttling for distant tamed farm animals (boars, wolves, hens, loxes).")
+                new ConfigDescription("Enable Animator LOD culling and idle AI throttling for distant calm tamed farm animals.")
             );
 
             TamedAnimalLodDistance = config.Bind(
                 "8. Farm Animals",
                 "TamedAnimalLodDistance",
-                15.0f,
+                18.0f,
                 new ConfigDescription(
-                    "Distance (in meters) beyond which tamed animal animators switch to LOD culling mode.",
+                    "Distance (in meters) beyond which tamed animal animators switch to CullUpdateTransforms.",
                     new AcceptableValueRange<float>(5f, 60f)
                 )
             );
@@ -386,15 +411,15 @@ namespace OptiHouse.Configuration
                 "9. Crafting Stations",
                 "EnableStationOptimization",
                 true,
-                new ConfigDescription("Enable particle and ambient audio culling on distant crafting, smelting, and processing stations.")
+                new ConfigDescription("Pause idle particle emissions and looping ambient audio on distant crafting stations, smelters, kilns, windmills, and beehives.")
             );
 
             StationCullDistance = config.Bind(
                 "9. Crafting Stations",
                 "StationCullDistance",
-                18.0f,
+                20.0f,
                 new ConfigDescription(
-                    "Distance (in meters) beyond which crafting station idle particles and looping audio effects are paused.",
+                    "Distance (in meters) beyond which station idle particles and looping audio effects are paused.",
                     new AcceptableValueRange<float>(5f, 60f)
                 )
             );
@@ -443,16 +468,16 @@ namespace OptiHouse.Configuration
                 "11. Interior Occlusion",
                 "EnableInteriorCulling",
                 true,
-                new ConfigDescription("Cull rendering of enclosed interior base furniture and decor when player is outside base shelter.")
+                new ConfigDescription("Cull rendering of distant enclosed interior furniture/chests/decor (never hides fireplaces, light fixtures, walls, or roofs).")
             );
 
             InteriorCullDistance = config.Bind(
                 "11. Interior Occlusion",
                 "InteriorCullDistance",
-                18.0f,
+                26.0f,
                 new ConfigDescription(
-                    "Distance (in meters) beyond which interior furniture and pieces are culled.",
-                    new AcceptableValueRange<float>(5f, 60f)
+                    "Distance (in meters) beyond which enclosed interior furniture and chests are culled.",
+                    new AcceptableValueRange<float>(8f, 80f)
                 )
             );
 
@@ -460,7 +485,7 @@ namespace OptiHouse.Configuration
                 "11. Interior Occlusion",
                 "EnableSmartInteriorCulling",
                 true,
-                new ConfigDescription("Enables smart per-room distance culling so distant rooms/buildings remain culled even when inside shelter.")
+                new ConfigDescription("Keeps distant enclosed rooms culled beyond InteriorCullDistance even when player is under another roof.")
             );
 
             // [12. Terrain Helpers]
@@ -468,7 +493,7 @@ namespace OptiHouse.Configuration
                 "12. Terrain Helpers",
                 "EnableTerrainSanityCheck",
                 true,
-                new ConfigDescription("Detect legacy uncompressed terrain modification stacks in base zones and log compaction recommendations.")
+                new ConfigDescription("Detect legacy uncompressed terrain modification stacks in base zones.")
             );
 
             // [13. Item Drops & Loot Clutter]
@@ -476,39 +501,22 @@ namespace OptiHouse.Configuration
                 "13. Item Drops & Loot",
                 "EnableItemDropOptimization",
                 true,
-                new ConfigDescription("Master switch for ground item drop physics sleep, auto-stacking, and particle throttling.")
-            );
-
-            EnableAutoStackNearbyItems = config.Bind(
-                "13. Item Drops & Loot",
-                "EnableAutoStackNearbyItems",
-                true,
-                new ConfigDescription("Periodically merges loose dropped items of the same type within radius into combined stacks to eliminate GameObject clutter.")
-            );
-
-            AutoStackRadius = config.Bind(
-                "13. Item Drops & Loot",
-                "AutoStackRadius",
-                3.5f,
-                new ConfigDescription(
-                    "Radius (in meters) within which identical loose item drops are merged.",
-                    new AcceptableValueRange<float>(1f, 10f)
-                )
+                new ConfigDescription("Put motionless ground item Rigidbodies to sleep and pause distant sparkle VFX (zero item modification/deletion).")
             );
 
             EnableDroppedItemPhysicsSleep = config.Bind(
                 "13. Item Drops & Loot",
                 "EnableDroppedItemPhysicsSleep",
                 true,
-                new ConfigDescription("Forces PhysX Rigidbody to sleep on motionless ground items to stop continuous physics collision checks.")
+                new ConfigDescription("Forces PhysX Rigidbody to sleep on motionless ground items to stop continuous collision checks.")
             );
 
             DroppedItemVfxCullDistance = config.Bind(
                 "13. Item Drops & Loot",
                 "DroppedItemVfxCullDistance",
-                15.0f,
+                18.0f,
                 new ConfigDescription(
-                    "Distance beyond which item drop sparkle VFX and floating scripts are paused.",
+                    "Distance beyond which item drop sparkle VFX are paused.",
                     new AcceptableValueRange<float>(5f, 50f)
                 )
             );
@@ -518,26 +526,26 @@ namespace OptiHouse.Configuration
                 "14. Structural Detail LOD",
                 "EnableDetailPieceLOD",
                 true,
-                new ConfigDescription("Dynamically culls renderers on small decorative micro-pieces (1m beams, cross beams, decorative brackets, trim) beyond culling distance while keeping walls and roofs 100% visible.")
+                new ConfigDescription("Culls renderers on purely ornamental micro-pieces (crosses, carvings, dragonheads, 1m poles/beams) beyond distance. Never touches walls or roof tiles.")
             );
 
             DetailPieceCullDistance = config.Bind(
                 "14. Structural Detail LOD",
                 "DetailPieceCullDistance",
-                32.0f,
+                38.0f,
                 new ConfigDescription(
-                    "Distance (in meters) beyond which small decorative structural details are culled from rendering.",
-                    new AcceptableValueRange<float>(10f, 80f)
+                    "Distance (in meters) beyond which purely ornamental micro-details are culled.",
+                    new AcceptableValueRange<float>(12f, 90f)
                 )
             );
 
             DetailPieceRestoreDistance = config.Bind(
                 "14. Structural Detail LOD",
                 "DetailPieceRestoreDistance",
-                26.0f,
+                30.0f,
                 new ConfigDescription(
-                    "Distance (in meters) at which small decorative details are restored (hysteresis margin).",
-                    new AcceptableValueRange<float>(5f, 75f)
+                    "Distance (in meters) at which small ornamental details are restored (hysteresis margin).",
+                    new AcceptableValueRange<float>(8f, 85f)
                 )
             );
         }

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using OptiHouse.Configuration;
 using UnityEngine;
@@ -7,24 +9,50 @@ using UnityEngine;
 namespace OptiHouse.Modules
 {
     /// <summary>
-    /// Dynamic Light & Shadow Optimizer for OptiHouse.
-    /// Manages the real-time shadow budget for point lights in Valheim bases.
-    /// - Sets LightLod.m_shadowLimit to cap simultaneous shadow-casting lights around the player.
-    /// - Strips heavy dynamic shadows from wall torches, sconces, and candles.
-    /// - Tracks scene point lights dynamically and falls back to LightShadows.None beyond the budget.
+    /// Dynamic Light, Shadow & Flicker Optimizer for OptiHouse.
+    /// - Caps active Forward-rendered point lights via Valheim's native LightLod.m_lightLimit,
+    ///   eliminating multi-pass ForwardAdd draw call explosions in torch-lit mega-bases.
+    /// - Caps real-time shadow-casting point lights via LightLod.m_shadowLimit + strips torch shadows.
+    /// - Throttles periodic Fireplace.CheckEnv physics/terrain raycasts from 4s to 20s.
+    /// - Skips CPU LightFlicker trigonometry on distant (>22m) permanent lights (deferring cleanly to VPO if installed).
+    /// - Fully reversible on runtime toggle (F7) or unload.
     /// </summary>
     public class LightShadowOptimizer : MonoBehaviour
     {
-        private static LightShadowOptimizer? _instance;
-        public static LightShadowOptimizer? Instance => _instance;
+        public static LightShadowOptimizer? Instance { get; private set; }
 
-        // Track point lights that do not have LightLod or need manual budget enforcement
+        private struct LightDistanceEntry
+        {
+            public Light Light;
+            public float SqrDistance;
+        }
+
+        private class LightLodBackup
+        {
+            public float OrigLightDistance;
+            public bool OrigShadowLod;
+            public float OrigShadowDistance;
+            public bool Modified;
+        }
+
+        private class FireplaceEnvCache
+        {
+            public float LastCheckTime = -999f;
+            public Vector3 LastPos;
+        }
+
         private static readonly HashSet<Light> _registeredLights = new HashSet<Light>();
         private static readonly List<LightDistanceEntry> _lightSortBuffer = new List<LightDistanceEntry>();
         private static readonly Dictionary<Light, LightShadows> _originalShadowModes = new Dictionary<Light, LightShadows>();
+        private static readonly Dictionary<Light, bool> _originalEnabledStates = new Dictionary<Light, bool>();
+        private static readonly ConditionalWeakTable<LightLod, LightLodBackup> _lodBackups = new ConditionalWeakTable<LightLod, LightLodBackup>();
+        private static readonly ConditionalWeakTable<Fireplace, FireplaceEnvCache> _envCaches = new ConditionalWeakTable<Fireplace, FireplaceEnvCache>();
 
-        private static readonly System.Reflection.FieldInfo? _lightLodLightsField =
-            typeof(LightLod).GetField("m_lights", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        private static readonly FieldInfo? _lightLodLightsField =
+            typeof(LightLod).GetField("m_lights", BindingFlags.NonPublic | BindingFlags.Static);
+
+        public static long EnvChecksThrottled { get; private set; }
+        public static long FlickersSkipped { get; internal set; }
 
         public static int TotalLights
         {
@@ -35,52 +63,70 @@ namespace OptiHouse.Modules
             }
         }
 
+        public static int ActivePointLights
+        {
+            get
+            {
+                int total = TotalLights;
+                if (!IsActive())
+                {
+                    return total;
+                }
+
+                int maxLights = ModConfig.MaxActivePointLights != null ? ModConfig.MaxActivePointLights.Value : 28;
+                return maxLights > 0 ? Mathf.Min(maxLights, total) : total;
+            }
+        }
+
         public static int ActiveShadowLights
         {
             get
             {
                 int total = TotalLights;
-                if (!OptiHousePlugin.IsOptimizationActive || ModConfig.EnableLightOptimization == null || !ModConfig.EnableLightOptimization.Value)
+                if (!IsActive())
                 {
                     return total;
                 }
+
                 int maxShadows = ModConfig.MaxShadowCastingLights != null ? ModConfig.MaxShadowCastingLights.Value : 6;
                 return Mathf.Min(maxShadows, total);
             }
         }
 
         public static int CulledShadowLights => Mathf.Max(0, TotalLights - ActiveShadowLights);
+        public static int CulledPointLights => Mathf.Max(0, TotalLights - ActivePointLights);
 
         private float _updateTimer;
         private bool _wasOptimizationActive = true;
 
-        private struct LightDistanceEntry
+        private static bool IsActive()
         {
-            public Light Light;
-            public float SqrDistance;
+            return OptiHousePlugin.IsOptimizationActive &&
+                   ModConfig.EnableLightOptimization != null &&
+                   ModConfig.EnableLightOptimization.Value;
         }
 
         private void Awake()
         {
-            _instance = this;
+            Instance = this;
         }
 
         private void OnDestroy()
         {
             RestoreAllLights();
-            if (_instance == this)
+            _registeredLights.Clear();
+            _originalShadowModes.Clear();
+            _originalEnabledStates.Clear();
+            _lightSortBuffer.Clear();
+            if (Instance == this)
             {
-                _instance = null;
+                Instance = null;
             }
         }
 
         private void Update()
         {
-            bool isActive = OptiHousePlugin.IsOptimizationActive &&
-                            ModConfig.EnableLightOptimization != null &&
-                            ModConfig.EnableLightOptimization.Value;
-
-            if (!isActive)
+            if (!IsActive())
             {
                 if (_wasOptimizationActive)
                 {
@@ -90,9 +136,12 @@ namespace OptiHouse.Modules
                 return;
             }
 
-            _wasOptimizationActive = true;
+            if (!_wasOptimizationActive)
+            {
+                _wasOptimizationActive = true;
+                ReapplyExistingLightLods();
+            }
 
-            // Update manual shadow budget at 1.0 second intervals (synchronized with LightLod)
             _updateTimer += Time.deltaTime;
             if (_updateTimer < 1.0f)
             {
@@ -104,97 +153,121 @@ namespace OptiHouse.Modules
         }
 
         /// <summary>
-        /// Registers a point light for dynamic shadow budget management.
+        /// Registers a non-LightLod point light (e.g. from custom or modded sconces) for distance & shadow capping.
         /// </summary>
         public static void RegisterLight(Light light)
         {
             if (light == null || light.type != LightType.Point) return;
-            if (!_registeredLights.Contains(light))
+            if (light.GetComponent<LightLod>() != null) return;
+            if (!OptimizationHelpers.IsValidWorldObject(light)) return;
+
+            if (_registeredLights.Add(light))
             {
-                _registeredLights.Add(light);
                 if (!_originalShadowModes.ContainsKey(light))
                 {
                     _originalShadowModes[light] = light.shadows;
                 }
+                if (!_originalEnabledStates.ContainsKey(light))
+                {
+                    _originalEnabledStates[light] = light.enabled;
+                }
             }
         }
 
-        /// <summary>
-        /// Unregisters a point light.
-        /// </summary>
         public static void UnregisterLight(Light light)
         {
             if (light == null) return;
             _registeredLights.Remove(light);
             _originalShadowModes.Remove(light);
+            _originalEnabledStates.Remove(light);
         }
 
-        /// <summary>
-        /// Enforces the shadow budget across registered non-LightLod point lights in base vicinity.
-        /// </summary>
         private static void ManageScenePointLights()
         {
             if (_registeredLights.Count == 0) return;
 
-            Vector3 refPos = GetReferencePosition();
-            int maxShadowLights = ModConfig.MaxShadowCastingLights != null
-                ? ModConfig.MaxShadowCastingLights.Value
-                : 6;
+            Vector3 refPos = OptimizationHelpers.GetReferencePosition();
+            int maxShadowLights = ModConfig.MaxShadowCastingLights != null ? ModConfig.MaxShadowCastingLights.Value : 6;
+            float cullDist = ModConfig.LightCullDistance != null ? ModConfig.LightCullDistance.Value : 45f;
+            float cullDistSq = cullDist * cullDist;
 
             _lightSortBuffer.Clear();
             _registeredLights.RemoveWhere(l => l == null);
 
-            // Collect active lights
             foreach (Light light in _registeredLights)
             {
-                if (!light.enabled || !light.gameObject.activeInHierarchy)
-                {
-                    continue;
-                }
-
+                if (light == null || !light.gameObject.activeInHierarchy) continue;
                 float sqrDist = (light.transform.position - refPos).sqrMagnitude;
-                _lightSortBuffer.Add(new LightDistanceEntry
-                {
-                    Light = light,
-                    SqrDistance = sqrDist
-                });
+                _lightSortBuffer.Add(new LightDistanceEntry { Light = light, SqrDistance = sqrDist });
             }
 
             if (_lightSortBuffer.Count == 0) return;
 
-            // Sort closest first
             _lightSortBuffer.Sort((a, b) => a.SqrDistance.CompareTo(b.SqrDistance));
+
+            int maxActiveLights = ModConfig.MaxActivePointLights != null && ModConfig.MaxActivePointLights.Value > 0
+                ? ModConfig.MaxActivePointLights.Value
+                : int.MaxValue;
 
             for (int i = 0; i < _lightSortBuffer.Count; i++)
             {
                 Light light = _lightSortBuffer[i].Light;
                 if (light == null) continue;
 
-                if (i < maxShadowLights)
+                bool withinCull = _lightSortBuffer[i].SqrDistance <= cullDistSq && i < maxActiveLights;
+                if (_originalEnabledStates.TryGetValue(light, out bool origEnabled))
                 {
-                    // Allow original shadow mode
-                    if (_originalShadowModes.TryGetValue(light, out LightShadows orig) && orig != LightShadows.None)
-                    {
-                        light.shadows = orig;
-                    }
+                    light.enabled = origEnabled && withinCull;
                 }
-                else
+
+                if (!withinCull || i >= maxShadowLights ||
+                    (ModConfig.DisableTorchShadows != null && ModConfig.DisableTorchShadows.Value && IsSmallTorchOrSconce(light.gameObject)))
                 {
-                    // Strip shadow for lights beyond the budget
                     if (light.shadows != LightShadows.None)
                     {
                         light.shadows = LightShadows.None;
                     }
                 }
+                else if (_originalShadowModes.TryGetValue(light, out LightShadows origShadow) && origShadow != LightShadows.None)
+                {
+                    light.shadows = origShadow;
+                }
             }
         }
 
-        /// <summary>
-        /// Restores all managed lights to their default shadow casting settings.
-        /// </summary>
+        private static void ReapplyExistingLightLods()
+        {
+            var lods = _lightLodLightsField?.GetValue(null) as HashSet<LightLod>;
+            if (lods == null) return;
+
+            foreach (LightLod lod in lods)
+            {
+                if (lod != null)
+                {
+                    ApplyToLightLod(lod);
+                }
+            }
+        }
+
         public static void RestoreAllLights()
         {
             LightLod.m_shadowLimit = -1;
+            LightLod.m_lightLimit = -1;
+
+            var lods = _lightLodLightsField?.GetValue(null) as HashSet<LightLod>;
+            if (lods != null)
+            {
+                foreach (LightLod lod in lods)
+                {
+                    if (lod != null && _lodBackups.TryGetValue(lod, out LightLodBackup backup) && backup.Modified)
+                    {
+                        lod.m_lightDistance = backup.OrigLightDistance;
+                        lod.m_shadowLod = backup.OrigShadowLod;
+                        lod.m_shadowDistance = backup.OrigShadowDistance;
+                        backup.Modified = false;
+                    }
+                }
+            }
 
             foreach (var kvp in _originalShadowModes)
             {
@@ -203,39 +276,26 @@ namespace OptiHouse.Modules
                     kvp.Key.shadows = kvp.Value;
                 }
             }
-            _registeredLights.Clear();
-            _originalShadowModes.Clear();
-            _lightSortBuffer.Clear();
+            foreach (var kvp in _originalEnabledStates)
+            {
+                if (kvp.Key != null)
+                {
+                    kvp.Key.enabled = kvp.Value;
+                }
+            }
         }
 
-        private static Vector3 GetReferencePosition()
-        {
-            if (Player.m_localPlayer != null)
-            {
-                return Player.m_localPlayer.transform.position;
-            }
-            Camera mainCam = Utils.GetMainCamera();
-            if (mainCam != null)
-            {
-                return mainCam.transform.position;
-            }
-            return Vector3.zero;
-        }
-
-        /// <summary>
-        /// Determines whether a GameObject represents a small torch, sconce, candle, or small light.
-        /// </summary>
         public static bool IsSmallTorchOrSconce(GameObject go)
         {
             if (go == null) return false;
 
-            string name = go.name.ToLowerInvariant();
-            if (name.Contains("torch") ||
-                name.Contains("sconce") ||
-                name.Contains("candle") ||
-                name.Contains("lantern") ||
-                name.Contains("brazier") ||
-                name.Contains("jackoturnip"))
+            string name = go.name;
+            if (OptimizationHelpers.ContainsIgnoreCase(name, "torch") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "sconce") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "candle") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "lantern") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "brazier") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "jackoturnip"))
             {
                 return true;
             }
@@ -243,12 +303,12 @@ namespace OptiHouse.Modules
             Piece piece = go.GetComponentInParent<Piece>();
             if (piece != null && !string.IsNullOrEmpty(piece.m_name))
             {
-                string pieceName = piece.m_name.ToLowerInvariant();
-                if (pieceName.Contains("torch") ||
-                    pieceName.Contains("sconce") ||
-                    pieceName.Contains("candle") ||
-                    pieceName.Contains("lantern") ||
-                    pieceName.Contains("brazier"))
+                string pieceName = piece.m_name;
+                if (OptimizationHelpers.ContainsIgnoreCase(pieceName, "torch") ||
+                    OptimizationHelpers.ContainsIgnoreCase(pieceName, "sconce") ||
+                    OptimizationHelpers.ContainsIgnoreCase(pieceName, "candle") ||
+                    OptimizationHelpers.ContainsIgnoreCase(pieceName, "lantern") ||
+                    OptimizationHelpers.ContainsIgnoreCase(pieceName, "brazier"))
                 {
                     return true;
                 }
@@ -257,69 +317,109 @@ namespace OptiHouse.Modules
             return false;
         }
 
-        /// <summary>
-        /// Disables shadow casting on LightLod and its associated Light component.
-        /// </summary>
-        public static void StripShadowsFromLod(LightLod lod)
+        public static void ApplyToLightLod(LightLod lod)
         {
-            if (lod == null) return;
-            lod.m_shadowLod = false;
-            lod.m_shadowDistance = 0f;
+            if (lod == null || !OptimizationHelpers.IsValidWorldObject(lod)) return;
 
-            Light light = lod.GetComponent<Light>();
-            if (light != null)
+            var backup = _lodBackups.GetOrCreateValue(lod);
+            if (!backup.Modified)
             {
-                light.shadows = LightShadows.None;
-                light.shadowStrength = 0f;
+                backup.OrigLightDistance = lod.m_lightDistance;
+                backup.OrigShadowLod = lod.m_shadowLod;
+                backup.OrigShadowDistance = lod.m_shadowDistance;
+                backup.Modified = true;
+            }
+
+            if (ModConfig.DisableTorchShadows != null &&
+                ModConfig.DisableTorchShadows.Value &&
+                IsSmallTorchOrSconce(lod.gameObject))
+            {
+                lod.m_shadowLod = false;
+                lod.m_shadowDistance = 0f;
+
+                Light light = lod.GetComponent<Light>();
+                if (light != null)
+                {
+                    light.shadows = LightShadows.None;
+                    light.shadowStrength = 0f;
+                }
+            }
+
+            if (ModConfig.LightCullDistance != null && ModConfig.LightCullDistance.Value > 0f)
+            {
+                lod.m_lightDistance = Mathf.Min(backup.OrigLightDistance, ModConfig.LightCullDistance.Value);
             }
         }
 
-        /// <summary>
-        /// Disables shadow casting recursively across all child lights of an object.
-        /// </summary>
-        public static void StripShadowsFromObject(GameObject go)
+        public static void ProcessFireplaceLights(Fireplace fp)
         {
-            if (go == null) return;
+            if (fp == null || !OptimizationHelpers.IsValidWorldObject(fp)) return;
 
-            LightLod[] lods = go.GetComponentsInChildren<LightLod>(true);
-            for (int i = 0; i < lods.Length; i++)
-            {
-                StripShadowsFromLod(lods[i]);
-            }
+            bool stripTorchShadows = ModConfig.DisableTorchShadows != null &&
+                                     ModConfig.DisableTorchShadows.Value &&
+                                     IsSmallTorchOrSconce(fp.gameObject);
 
-            Light[] lights = go.GetComponentsInChildren<Light>(true);
+            Light[] lights = fp.GetComponentsInChildren<Light>(true);
             for (int i = 0; i < lights.Length; i++)
             {
-                if (lights[i] != null)
+                Light l = lights[i];
+                if (l == null) continue;
+
+                LightLod lod = l.GetComponent<LightLod>();
+                if (lod != null)
                 {
-                    lights[i].shadows = LightShadows.None;
-                    lights[i].shadowStrength = 0f;
+                    ApplyToLightLod(lod);
+                }
+                else
+                {
+                    RegisterLight(l);
+                    if (stripTorchShadows)
+                    {
+                        l.shadows = LightShadows.None;
+                        l.shadowStrength = 0f;
+                    }
                 }
             }
+        }
+
+        public static bool ShouldRunFireplaceEnvCheck(Fireplace fp, bool isBlocked)
+        {
+            if (!IsActive() ||
+                ModConfig.ThrottleFireplaceEnvChecks == null ||
+                !ModConfig.ThrottleFireplaceEnvChecks.Value)
+            {
+                return true;
+            }
+
+            if (fp == null || !OptimizationHelpers.IsValidWorldObject(fp))
+            {
+                return true;
+            }
+
+            // If currently blocked, let vanilla re-check at normal 4s rate so unblocking responds fast
+            if (isBlocked)
+            {
+                return true;
+            }
+
+            var cache = _envCaches.GetOrCreateValue(fp);
+            Vector3 pos = fp.transform.position;
+            float now = Time.time;
+
+            if (cache.LastCheckTime < 0f || (pos - cache.LastPos).sqrMagnitude > 0.05f || now - cache.LastCheckTime >= 20.0f)
+            {
+                cache.LastCheckTime = now;
+                cache.LastPos = pos;
+                return true;
+            }
+
+            EnvChecksThrottled++;
+            return false;
         }
     }
 
     #region Harmony Patches
 
-    /// <summary>
-    /// Attach LightShadowOptimizer to the mod plugin GameObject on startup.
-    /// </summary>
-    [HarmonyPatch(typeof(OptiHousePlugin), "Awake")]
-    public static class LightShadowOptimizer_Plugin_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(OptiHousePlugin __instance)
-        {
-            if (__instance != null && __instance.gameObject.GetComponent<LightShadowOptimizer>() == null)
-            {
-                __instance.gameObject.AddComponent<LightShadowOptimizer>();
-            }
-        }
-    }
-
-    /// <summary>
-    /// Enforces LightLod.m_shadowLimit dynamically based on OptiHouse configuration.
-    /// </summary>
     [HarmonyPatch(typeof(LightLod), nameof(LightLod.UpdateLights))]
     public static class LightLod_UpdateLights_Patch
     {
@@ -330,23 +430,23 @@ namespace OptiHouse.Modules
                 ModConfig.EnableLightOptimization != null &&
                 ModConfig.EnableLightOptimization.Value)
             {
-                int maxShadows = ModConfig.MaxShadowCastingLights != null
+                LightLod.m_shadowLimit = ModConfig.MaxShadowCastingLights != null
                     ? ModConfig.MaxShadowCastingLights.Value
                     : 6;
 
-                LightLod.m_shadowLimit = maxShadows;
+                int maxLights = ModConfig.MaxActivePointLights != null
+                    ? ModConfig.MaxActivePointLights.Value
+                    : 28;
+                LightLod.m_lightLimit = maxLights > 0 ? maxLights : -1;
             }
             else
             {
                 LightLod.m_shadowLimit = -1;
+                LightLod.m_lightLimit = -1;
             }
         }
     }
 
-    /// <summary>
-    /// Strips shadows from small torches/sconces/candles when LightLod awakes.
-    /// Also applies maximum light cull distance.
-    /// </summary>
     [HarmonyPatch(typeof(LightLod), "Awake")]
     public static class LightLod_Awake_Patch
     {
@@ -354,7 +454,6 @@ namespace OptiHouse.Modules
         public static void Postfix(LightLod __instance)
         {
             if (__instance == null) return;
-
             if (!OptiHousePlugin.IsOptimizationActive ||
                 ModConfig.EnableLightOptimization == null ||
                 !ModConfig.EnableLightOptimization.Value)
@@ -362,25 +461,10 @@ namespace OptiHouse.Modules
                 return;
             }
 
-            // Strip torch and sconce shadows if configured
-            if (ModConfig.DisableTorchShadows != null &&
-                ModConfig.DisableTorchShadows.Value &&
-                LightShadowOptimizer.IsSmallTorchOrSconce(__instance.gameObject))
-            {
-                LightShadowOptimizer.StripShadowsFromLod(__instance);
-            }
-
-            // Apply light cull distance limit
-            if (ModConfig.LightCullDistance != null && ModConfig.LightCullDistance.Value > 0f)
-            {
-                __instance.m_lightDistance = Mathf.Min(__instance.m_lightDistance, ModConfig.LightCullDistance.Value);
-            }
+            LightShadowOptimizer.ApplyToLightLod(__instance);
         }
     }
 
-    /// <summary>
-    /// Strips shadows from Fireplace pieces (torches, sconces, wall braziers) when they initialize.
-    /// </summary>
     [HarmonyPatch(typeof(Fireplace), "Start")]
     public static class Fireplace_Start_Patch
     {
@@ -388,26 +472,17 @@ namespace OptiHouse.Modules
         public static void Postfix(Fireplace __instance)
         {
             if (__instance == null) return;
-
             if (!OptiHousePlugin.IsOptimizationActive ||
                 ModConfig.EnableLightOptimization == null ||
-                !ModConfig.EnableLightOptimization.Value ||
-                ModConfig.DisableTorchShadows == null ||
-                !ModConfig.DisableTorchShadows.Value)
+                !ModConfig.EnableLightOptimization.Value)
             {
                 return;
             }
 
-            if (LightShadowOptimizer.IsSmallTorchOrSconce(__instance.gameObject))
-            {
-                LightShadowOptimizer.StripShadowsFromObject(__instance.gameObject);
-            }
+            LightShadowOptimizer.ProcessFireplaceLights(__instance);
         }
     }
 
-    /// <summary>
-    /// Re-applies shadow stripping when a Fireplace toggles or updates state (e.g. refueled).
-    /// </summary>
     [HarmonyPatch(typeof(Fireplace), "UpdateFireplace")]
     public static class Fireplace_UpdateFireplace_Patch
     {
@@ -415,7 +490,6 @@ namespace OptiHouse.Modules
         public static void Postfix(Fireplace __instance)
         {
             if (__instance == null) return;
-
             if (!OptiHousePlugin.IsOptimizationActive ||
                 ModConfig.EnableLightOptimization == null ||
                 !ModConfig.EnableLightOptimization.Value ||
@@ -425,10 +499,59 @@ namespace OptiHouse.Modules
                 return;
             }
 
-            if (LightShadowOptimizer.IsSmallTorchOrSconce(__instance.gameObject))
+            LightShadowOptimizer.ProcessFireplaceLights(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(Fireplace), "CheckEnv")]
+    public static class Fireplace_CheckEnv_Patch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(Fireplace __instance, bool ___m_blocked)
+        {
+            return LightShadowOptimizer.ShouldRunFireplaceEnvCheck(__instance, ___m_blocked);
+        }
+    }
+
+    [HarmonyPatch(typeof(LightFlicker), nameof(LightFlicker.CustomUpdate))]
+    public static class LightFlicker_CustomUpdate_Patch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(LightFlicker __instance)
+        {
+            if (__instance == null ||
+                !OptiHousePlugin.IsOptimizationActive ||
+                ModConfig.EnableLightOptimization == null ||
+                !ModConfig.EnableLightOptimization.Value ||
+                ModConfig.CullDistantLightFlicker == null ||
+                !ModConfig.CullDistantLightFlicker.Value)
             {
-                LightShadowOptimizer.StripShadowsFromObject(__instance.gameObject);
+                return true;
             }
+
+            // Defer cleanly to VPO's CullingGroup subclass (VPOLightFlicker) if present
+            if (__instance.GetType() != typeof(LightFlicker))
+            {
+                return true;
+            }
+
+            // Never skip timed explosion/effect flashes that destroy themselves via m_ttl
+            if (__instance.m_ttl > 0f)
+            {
+                return true;
+            }
+
+            if (OptimizationHelpers.TryGetReferencePosition(out Vector3 refPos))
+            {
+                float sqrDist = (__instance.transform.position - refPos).sqrMagnitude;
+                if (sqrDist > 484f) // 22m
+                {
+                    LightShadowOptimizer.FlickersSkipped++;
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 

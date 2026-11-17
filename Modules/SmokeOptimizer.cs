@@ -1,5 +1,3 @@
-using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
 using OptiHouse.Configuration;
@@ -8,30 +6,24 @@ using UnityEngine;
 namespace OptiHouse.Modules
 {
     /// <summary>
-    /// Optimizes indoor base smoke by capping active smoke puffs, throttling
-    /// spawner and physics raycasts, and optionally disabling smoke particle rendering
-    /// while fully preserving heat, comfort, fire, and chimney mechanics.
+    /// Optimizes indoor base smoke by capping active smoke puffs (FadeMostDistant/FadeOldest),
+    /// caching SmokeSpawner.TestBlocked physics checks, and accelerating smoke dissipation cleanly.
+    /// Warmth, fire, comfort, and chimney choking mechanics remain 100% intact.
     /// </summary>
     public static class SmokeOptimizer
     {
         public static int GetConfiguredSmokeCap()
         {
-            if (ModConfig.MaxActiveSmokePuffs == null)
-                return 25;
-
+            if (ModConfig.MaxActiveSmokePuffs == null) return 25;
             return Mathf.Max(5, ModConfig.MaxActiveSmokePuffs.Value);
         }
     }
 
-    /// <summary>
-    /// Enforces the active smoke puff cap when spawning new smoke from fireplaces,
-    /// braziers, and hearths.
-    /// </summary>
     [HarmonyPatch(typeof(SmokeSpawner), "Spawn")]
     public static class SmokeSpawner_Spawn_Patch
     {
-        [HarmonyPrefix]
-        public static void Prefix(SmokeSpawner __instance)
+        [HarmonyPostfix]
+        public static void Postfix()
         {
             if (!OptiHousePlugin.IsOptimizationActive ||
                 ModConfig.EnableSmokeOptimization == null ||
@@ -40,31 +32,20 @@ namespace OptiHouse.Modules
                 return;
             }
 
-            Player localPlayer = Player.m_localPlayer;
-            if (localPlayer == null || Vector3.Distance(localPlayer.transform.position, __instance.transform.position) > 64f)
-            {
-                return;
-            }
-
             int cap = SmokeOptimizer.GetConfiguredSmokeCap();
-            // Cull oldest smoke puffs so total count never exceeds configured cap
-            while (Smoke.GetTotalSmoke() >= cap && Smoke.GetTotalSmoke() > 0)
+            while (Smoke.GetTotalSmoke() > cap && Smoke.GetTotalSmoke() > 0)
             {
                 Smoke.FadeOldest();
             }
         }
     }
 
-    /// <summary>
-    /// Throttles SmokeSpawner.TestBlocked sphere checks to reduce heavy PhysX queries
-    /// in bases with numerous fire sources.
-    /// </summary>
     [HarmonyPatch(typeof(SmokeSpawner), "TestBlocked")]
     public static class SmokeSpawner_TestBlocked_Patch
     {
         private class CacheEntry
         {
-            public float LastCheckTime;
+            public float LastCheckTime = -999f;
             public bool IsBlocked;
         }
 
@@ -85,26 +66,20 @@ namespace OptiHouse.Modules
             float now = Time.time;
             var entry = _cache.GetOrCreateValue(__instance);
 
-            // Throttle to 1 check per second per spawner
-            if (now - entry.LastCheckTime < 1.0f)
+            if (now - entry.LastCheckTime < 1.5f)
             {
                 __result = entry.IsBlocked;
                 return false;
             }
 
-            // Run actual sphere check and update cache
             bool blocked = Physics.CheckSphere(__instance.transform.position, __instance.m_testRadius, __instance.m_testMask.value);
             entry.LastCheckTime = now;
             entry.IsBlocked = blocked;
             __result = blocked;
-
             return false;
         }
     }
 
-    /// <summary>
-    /// Throttles smoke physics calculations when the puff is already fading out.
-    /// </summary>
     [HarmonyPatch(typeof(Smoke), nameof(Smoke.CustomUpdate))]
     public static class Smoke_CustomUpdate_Patch
     {
@@ -112,7 +87,6 @@ namespace OptiHouse.Modules
         public static bool Prefix(
             Smoke __instance,
             float deltaTime,
-            float time,
             ref float ___m_time,
             ref float ___m_fadeTimer,
             Rigidbody ___m_body,
@@ -136,7 +110,6 @@ namespace OptiHouse.Modules
                 __instance.StartFadeOut();
             }
 
-            // Only perform force calculations on actively rising smoke
             if (___m_fadeTimer < 0f)
             {
                 float num = 1f - Mathf.Clamp01(___m_time / ___m_ttl);
@@ -149,11 +122,10 @@ namespace OptiHouse.Modules
             }
             else
             {
-                // Fading puff drifts naturally without continuous AddForce calls
                 ___m_fadeTimer += deltaTime;
                 if (___m_fadeTimer >= ___m_fadetime)
                 {
-                    UnityEngine.Object.Destroy(__instance.gameObject);
+                    Object.Destroy(__instance.gameObject);
                 }
             }
 
@@ -161,22 +133,19 @@ namespace OptiHouse.Modules
         }
     }
 
-    /// <summary>
-    /// Option to disable visual particle rendering for smoke in SmokeRenderer,
-    /// while keeping smoke GameObjects, colliders, heat, and comfort intact.
-    /// </summary>
     [HarmonyPatch(typeof(SmokeRenderer), "LateUpdate")]
     public static class SmokeRenderer_LateUpdate_Patch
     {
-        private static bool _wasDisabled = false;
+        private static bool _wasDisabled;
 
         [HarmonyPrefix]
-        public static bool Prefix(Dictionary<Vector3Int, ParticleSystem> ___m_chunkedParticleSystems)
+        public static bool Prefix(System.Collections.Generic.Dictionary<Vector3Int, ParticleSystem> ___m_chunkedParticleSystems)
         {
             if (!OptiHousePlugin.IsOptimizationActive ||
                 ModConfig.EnableSmokeOptimization == null ||
                 !ModConfig.EnableSmokeOptimization.Value)
             {
+                _wasDisabled = false;
                 return true;
             }
 
@@ -204,26 +173,23 @@ namespace OptiHouse.Modules
         }
     }
 
-    /// <summary>
-    /// Harmony patch on Smoke.Awake to accelerate smoke puff dissipation.
-    /// Smoke particles dissolve quickly instead of lingering indefinitely under ceilings.
-    /// </summary>
     [HarmonyPatch(typeof(Smoke), "Awake")]
     public static class Smoke_Awake_Patch
     {
-        [HarmonyPostfix]
-        public static void Postfix(Smoke __instance)
+        [HarmonyPrefix]
+        public static void Prefix(Smoke __instance)
         {
-            if (!OptiHousePlugin.IsOptimizationActive)
-                return;
-
-            if (ModConfig.EnableFastParticleFade != null && ModConfig.EnableFastParticleFade.Value &&
-                ModConfig.SmokeLifetimeMultiplier != null)
+            if (!OptiHousePlugin.IsOptimizationActive ||
+                ModConfig.EnableFastParticleFade == null ||
+                !ModConfig.EnableFastParticleFade.Value ||
+                ModConfig.SmokeLifetimeMultiplier == null)
             {
-                float mult = ModConfig.SmokeLifetimeMultiplier.Value;
-                __instance.m_ttl = Mathf.Max(2.5f, __instance.m_ttl * mult);
-                __instance.m_fadetime = Mathf.Max(0.8f, __instance.m_fadetime * mult);
+                return;
             }
+
+            float mult = ModConfig.SmokeLifetimeMultiplier.Value;
+            __instance.m_ttl = Mathf.Max(2.5f, __instance.m_ttl * mult);
+            __instance.m_fadetime = Mathf.Max(0.8f, __instance.m_fadetime * mult);
         }
     }
 }

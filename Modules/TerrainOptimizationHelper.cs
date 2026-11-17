@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using HarmonyLib;
 using OptiHouse.Configuration;
 using UnityEngine;
 
@@ -222,24 +221,4 @@ namespace OptiHouse.Modules
             return compactedZones;
         }
     }
-
-    #region Harmony Patches
-
-    /// <summary>
-    /// Auto-attaches TerrainOptimizationHelper to OptiHousePlugin GameObject on Awake.
-    /// </summary>
-    [HarmonyPatch(typeof(OptiHousePlugin), "Awake")]
-    public static class TerrainOptimizationHelper_Plugin_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(OptiHousePlugin __instance)
-        {
-            if (__instance != null && __instance.gameObject.GetComponent<TerrainOptimizationHelper>() == null)
-            {
-                __instance.gameObject.AddComponent<TerrainOptimizationHelper>();
-            }
-        }
-    }
-
-    #endregion
 }

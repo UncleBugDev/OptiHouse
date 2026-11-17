@@ -8,49 +8,54 @@ using UnityEngine;
 namespace OptiHouse.Modules
 {
     /// <summary>
-    /// Item Drop & Ground Loot Clutter Optimizer for OptiHouse.
-    /// Eliminates severe physics, transform, and draw call overhead caused by hundreds of loose
-    /// dropped items (wood logs, stone, resin, trophies, farming drops) around player bases.
-    ///
-    /// Key Capabilities:
-    /// 1. Auto-Stacker: Periodically merges identical loose item drops within a 3.5m radius
-    ///    into consolidated max-size stacks, removing redundant GameObjects and ZDOs.
-    /// 2. Physics Sleep: Puts motionless item drop Rigidbodies to sleep so PhysX stops
-    ///    computing continuous terrain/piece collision queries for settled ground items.
-    /// 3. Particle & Floating LOD: Pauses sparkle particle effects and water floating scripts
-    ///    on distant dropped items beyond 15m.
+    /// Safe Ground Loot Clutter Optimizer for OptiHouse.
+    /// - Puts motionless ground item Rigidbodies to sleep to stop continuous PhysX collision checks.
+    /// - Pauses distant (>18m) ground drop sparkle particles and water Floating ticks.
+    /// - Caches all component references on Awake for zero per-frame heap allocations.
+    /// - NEVER alters item stacks or destroys ZDOs (100% multiplayer & save safe).
     /// </summary>
     public class ItemDropOptimizer : MonoBehaviour
     {
-        private static ItemDropOptimizer? _instance;
-        public static ItemDropOptimizer? Instance => _instance;
+        public static ItemDropOptimizer? Instance { get; private set; }
 
-        private static readonly List<ItemDrop> _allItemDrops = new List<ItemDrop>();
-        private static int _stackedItemsCount;
+        private class TrackedDrop
+        {
+            public int InstanceId;
+            public ItemDrop Drop = null!;
+            public Transform Transform = null!;
+            public Rigidbody? Body;
+            public Floating? Floating;
+            public ParticleSystem[] Particles = Array.Empty<ParticleSystem>();
+            public bool IsCulled;
+        }
+
+        private static readonly List<TrackedDrop> _drops = new List<TrackedDrop>();
+        private static readonly Dictionary<int, TrackedDrop> _dropLookup = new Dictionary<int, TrackedDrop>();
+
         private static int _sleepingRigidbodiesCount;
 
-        public static int TotalDroppedItems => _allItemDrops.Count;
-        public static int MergedDropsCount => _stackedItemsCount;
+        public static int TotalDroppedItems => _drops.Count;
         public static int SleepingItemsCount => _sleepingRigidbodiesCount;
 
-        private float _stackTimer;
         private float _physicsTimer;
         private int _lodIndex;
+        private bool _wasActive = true;
 
         private void Awake()
         {
-            _instance = this;
+            Instance = this;
             ScanExistingDrops();
         }
 
         private void OnDestroy()
         {
-            _allItemDrops.Clear();
-            _stackedItemsCount = 0;
+            RestoreAllDrops();
+            _drops.Clear();
+            _dropLookup.Clear();
             _sleepingRigidbodiesCount = 0;
-            if (_instance == this)
+            if (Instance == this)
             {
-                _instance = null;
+                Instance = null;
             }
         }
 
@@ -61,47 +66,68 @@ namespace OptiHouse.Modules
             {
                 for (int i = 0; i < drops.Length; i++)
                 {
-                    RegisterItemDrop(drops[i]);
+                    if (drops[i] != null)
+                    {
+                        RegisterItemDrop(drops[i]);
+                    }
                 }
             }
         }
 
         public static void RegisterItemDrop(ItemDrop drop)
         {
-            if (drop == null || _allItemDrops.Contains(drop)) return;
-            _allItemDrops.Add(drop);
+            if (drop == null || drop.gameObject == null) return;
+
+            int id = drop.GetInstanceID();
+            if (_dropLookup.ContainsKey(id)) return;
+
+            var entry = new TrackedDrop
+            {
+                InstanceId = id,
+                Drop = drop,
+                Transform = drop.transform,
+                Body = drop.GetComponent<Rigidbody>(),
+                Floating = drop.GetComponent<Floating>(),
+                Particles = drop.GetComponentsInChildren<ParticleSystem>(true) ?? Array.Empty<ParticleSystem>(),
+                IsCulled = false
+            };
+
+            _drops.Add(entry);
+            _dropLookup[id] = entry;
         }
 
         public static void UnregisterItemDrop(ItemDrop drop)
         {
             if (drop == null) return;
-            _allItemDrops.Remove(drop);
+
+            int id = drop.GetInstanceID();
+            if (_dropLookup.TryGetValue(id, out TrackedDrop entry))
+            {
+                RestoreDrop(entry);
+                _drops.Remove(entry);
+                _dropLookup.Remove(id);
+            }
         }
 
         private void Update()
         {
-            if (!OptiHousePlugin.IsOptimizationActive ||
-                ModConfig.EnableItemDropOptimization == null ||
-                !ModConfig.EnableItemDropOptimization.Value)
+            bool isActive = OptiHousePlugin.IsOptimizationActive &&
+                            ModConfig.EnableItemDropOptimization != null &&
+                            ModConfig.EnableItemDropOptimization.Value;
+
+            if (!isActive)
             {
+                if (_wasActive)
+                {
+                    _wasActive = false;
+                    RestoreAllDrops();
+                }
                 return;
             }
 
-            float dt = Time.deltaTime;
+            _wasActive = true;
 
-            // 1. Periodic Auto-Stacking of nearby loose drops (every 2.5 seconds)
-            if (ModConfig.EnableAutoStackNearbyItems != null && ModConfig.EnableAutoStackNearbyItems.Value)
-            {
-                _stackTimer += dt;
-                if (_stackTimer >= 2.5f)
-                {
-                    _stackTimer = 0f;
-                    ProcessAutoStacking();
-                }
-            }
-
-            // 2. Periodic Physics Sleep & Particle LOD (every 0.5 seconds)
-            _physicsTimer += dt;
+            _physicsTimer += Time.deltaTime;
             if (_physicsTimer >= 0.5f)
             {
                 _physicsTimer = 0f;
@@ -109,199 +135,125 @@ namespace OptiHouse.Modules
             }
         }
 
-        private void ProcessAutoStacking()
-        {
-            if (_allItemDrops.Count < 2) return;
-
-            float stackRadius = ModConfig.AutoStackRadius != null
-                ? ModConfig.AutoStackRadius.Value
-                : 3.5f;
-            float stackRadiusSq = stackRadius * stackRadius;
-
-            // Clean up destroyed items first
-            _allItemDrops.RemoveAll(d => d == null || d.gameObject == null);
-
-            for (int i = 0; i < _allItemDrops.Count; i++)
-            {
-                ItemDrop itemA = _allItemDrops[i];
-                if (itemA == null || itemA.m_itemData == null) continue;
-
-                ZNetView nviewA = itemA.GetComponent<ZNetView>();
-                if (nviewA == null || !nviewA.IsValid()) continue;
-
-                int maxStack = itemA.m_itemData.m_shared.m_maxStackSize;
-                if (maxStack <= 1 || itemA.m_itemData.m_stack >= maxStack)
-                {
-                    continue;
-                }
-
-                Vector3 posA = itemA.transform.position;
-                string nameA = itemA.m_itemData.m_shared.m_name;
-                int qualityA = itemA.m_itemData.m_quality;
-                int variantA = itemA.m_itemData.m_variant;
-
-                for (int j = i + 1; j < _allItemDrops.Count; j++)
-                {
-                    ItemDrop itemB = _allItemDrops[j];
-                    if (itemB == null || itemB.m_itemData == null) continue;
-
-                    ZNetView nviewB = itemB.GetComponent<ZNetView>();
-                    if (nviewB == null || !nviewB.IsValid()) continue;
-
-                    if (itemB.m_itemData.m_shared.m_name != nameA ||
-                        itemB.m_itemData.m_quality != qualityA ||
-                        itemB.m_itemData.m_variant != variantA)
-                    {
-                        continue;
-                    }
-
-                    if ((itemB.transform.position - posA).sqrMagnitude <= stackRadiusSq)
-                    {
-                        // Found matching stackable item within radius
-                        int spaceInA = maxStack - itemA.m_itemData.m_stack;
-                        int transfer = Mathf.Min(spaceInA, itemB.m_itemData.m_stack);
-
-                        if (transfer > 0)
-                        {
-                            itemA.SetStack(itemA.m_itemData.m_stack + transfer);
-
-                            if (itemB.m_itemData.m_stack <= transfer)
-                            {
-                                if (!nviewB.IsOwner())
-                                {
-                                    nviewB.ClaimOwnership();
-                                }
-                                if (ZNetScene.instance != null)
-                                {
-                                    ZNetScene.instance.Destroy(itemB.gameObject);
-                                }
-                                else
-                                {
-                                    Destroy(itemB.gameObject);
-                                }
-                                _stackedItemsCount++;
-                            }
-                            else
-                            {
-                                itemB.SetStack(itemB.m_itemData.m_stack - transfer);
-                            }
-
-                            if (itemA.m_itemData.m_stack >= maxStack)
-                            {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         private void ProcessPhysicsSleepAndLOD()
         {
-            if (_allItemDrops.Count == 0) return;
+            if (_drops.Count == 0)
+            {
+                _sleepingRigidbodiesCount = 0;
+                return;
+            }
 
-            Vector3 refPos = GetReferencePosition();
+            Vector3 refPos = OptimizationHelpers.GetReferencePosition();
             float vfxDist = ModConfig.DroppedItemVfxCullDistance != null
                 ? ModConfig.DroppedItemVfxCullDistance.Value
-                : 15.0f;
+                : 18.0f;
             float vfxDistSq = vfxDist * vfxDist;
 
             bool enableSleep = ModConfig.EnableDroppedItemPhysicsSleep != null &&
                                ModConfig.EnableDroppedItemPhysicsSleep.Value;
 
             int sleepingCount = 0;
-
-            int count = _allItemDrops.Count;
+            int count = _drops.Count;
             int batch = Mathf.Min(100, count);
 
             for (int i = 0; i < batch; i++)
             {
                 _lodIndex++;
-                if (_lodIndex >= _allItemDrops.Count)
+                if (_lodIndex >= _drops.Count)
                 {
                     _lodIndex = 0;
                 }
 
-                ItemDrop drop = _allItemDrops[_lodIndex];
-                if (drop == null || drop.gameObject == null) continue;
-
-                // 1. Rigidbody Physics Sleep on settled items
-                if (enableSleep)
+                TrackedDrop entry = _drops[_lodIndex];
+                if (entry.Drop == null || entry.Transform == null)
                 {
-                    Rigidbody rb = drop.GetComponent<Rigidbody>();
-                    if (rb != null && !rb.isKinematic)
+                    _dropLookup.Remove(entry.InstanceId);
+                    _drops.RemoveAt(_lodIndex);
+                    if (_lodIndex > 0) _lodIndex--;
+                    continue;
+                }
+
+                if (!entry.Drop.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                // 1. Rigidbody Physics Sleep on settled motionless items (avoid sleeping items actively floating on liquid)
+                bool isFloatingInLiquid = entry.Floating != null && entry.Floating.HaveLiquidLevel();
+                if (enableSleep && !isFloatingInLiquid && entry.Body != null && !entry.Body.isKinematic)
+                {
+                    if (entry.Body.IsSleeping())
                     {
-                        if (rb.IsSleeping())
-                        {
-                            sleepingCount++;
-                        }
-                        else if (rb.velocity.sqrMagnitude < 0.04f && rb.angularVelocity.sqrMagnitude < 0.04f)
-                        {
-                            rb.Sleep();
-                            sleepingCount++;
-                        }
+                        sleepingCount++;
+                    }
+                    else if (entry.Body.velocity.sqrMagnitude < 0.03f && entry.Body.angularVelocity.sqrMagnitude < 0.03f)
+                    {
+                        entry.Body.Sleep();
+                        sleepingCount++;
                     }
                 }
 
                 // 2. Sparkle particle & floating script distance culling
-                float sqrDist = (drop.transform.position - refPos).sqrMagnitude;
+                float sqrDist = (entry.Transform.position - refPos).sqrMagnitude;
                 bool shouldCullVfx = sqrDist > vfxDistSq;
 
-                ParticleSystem[] particles = drop.GetComponentsInChildren<ParticleSystem>(true);
-                for (int p = 0; p < particles.Length; p++)
+                if (shouldCullVfx && !entry.IsCulled)
                 {
-                    ParticleSystem ps = particles[p];
-                    if (ps == null) continue;
-
-                    if (shouldCullVfx && ps.isPlaying)
+                    entry.IsCulled = true;
+                    for (int p = 0; p < entry.Particles.Length; p++)
                     {
-                        ps.Pause();
+                        ParticleSystem ps = entry.Particles[p];
+                        if (ps != null && ps.isPlaying)
+                        {
+                            ps.Pause();
+                        }
                     }
-                    else if (!shouldCullVfx && ps.isPaused)
+                    if (entry.Floating != null && entry.Floating.enabled)
                     {
-                        ps.Play();
+                        entry.Floating.enabled = false;
                     }
                 }
-
-                Floating floating = drop.GetComponent<Floating>();
-                if (floating != null)
+                else if (!shouldCullVfx && entry.IsCulled)
                 {
-                    floating.enabled = !shouldCullVfx;
+                    RestoreDrop(entry);
                 }
             }
 
-            _sleepingRigidbodiesCount = sleepingCount;
+            // Scale estimate cleanly if _drops > batch
+            _sleepingRigidbodiesCount = batch > 0 ? Mathf.RoundToInt(sleepingCount * ((float)_drops.Count / batch)) : 0;
         }
 
-        private static Vector3 GetReferencePosition()
+        private static void RestoreDrop(TrackedDrop entry)
         {
-            if (Player.m_localPlayer != null)
+            if (!entry.IsCulled) return;
+            entry.IsCulled = false;
+
+            for (int p = 0; p < entry.Particles.Length; p++)
             {
-                return Player.m_localPlayer.transform.position;
+                ParticleSystem ps = entry.Particles[p];
+                if (ps != null && ps.isPaused)
+                {
+                    ps.Play();
+                }
             }
-            Camera mainCam = Utils.GetMainCamera();
-            if (mainCam != null)
+
+            if (entry.Floating != null && !entry.Floating.enabled)
             {
-                return mainCam.transform.position;
+                entry.Floating.enabled = true;
             }
-            return Vector3.zero;
+        }
+
+        public static void RestoreAllDrops()
+        {
+            for (int i = 0; i < _drops.Count; i++)
+            {
+                RestoreDrop(_drops[i]);
+            }
+            _sleepingRigidbodiesCount = 0;
         }
     }
 
     #region Harmony Patches
-
-    [HarmonyPatch(typeof(OptiHousePlugin), "Awake")]
-    public static class ItemDropOptimizer_Plugin_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(OptiHousePlugin __instance)
-        {
-            if (__instance != null && __instance.gameObject.GetComponent<ItemDropOptimizer>() == null)
-            {
-                __instance.gameObject.AddComponent<ItemDropOptimizer>();
-            }
-        }
-    }
 
     [HarmonyPatch(typeof(ItemDrop), "Awake")]
     public static class ItemDropOptimizer_Awake_Patch

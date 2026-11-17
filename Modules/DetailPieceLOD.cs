@@ -8,40 +8,57 @@ namespace OptiHouse.Modules
 {
     /// <summary>
     /// Structural Detail Piece LOD System for OptiHouse.
-    /// Eliminates massive draw call and vertex bottlenecks in mega-bases by dynamically culling
-    /// the renderers of small decorative micro-pieces (1m beams, 26°/45° cross beams, decorative brackets,
-    /// trim, dragonheads, roof crests) when beyond the visual detail threshold (default: 32m).
+    /// Culls renderers of purely ornamental micro-pieces (carvings, dragonheads, brackets,
+    /// cross beams, 1m micro-poles/beams) beyond DetailPieceCullDistance (default 38m).
     ///
-    /// CRITICAL VISUAL & SAFETY GUARANTEES:
-    /// 1. Main structural walls, 2m/4m poles, stone/marble walls, floors, stairs, and full roofs
-    ///    are NEVER culled, preserving the magnificent full silhouette of castles and bases from any distance.
-    /// 2. Hammer/Build Tool Safety: If the player equips a hammer or enters build/repair mode,
-    ///    instantly restores all detail renderers for pixel-perfect snapping and building.
-    /// 3. Smooth hysteresis margin (default 6m) prevents rapid render toggling at boundary.
+    /// VISUAL & SAFETY GUARANTEES:
+    /// 1. NEVER culls walls, floors, stairs, doors, portals, pillars, or ANY roof/ridge tiles
+    ///    so castle silhouettes and roof peaks remain 100% solid and hole-free.
+    /// 2. Snapshots only enabled renderers when culling so WearNTear damage meshes remain intact.
+    /// 3. Automatically restores all detail renderers when holding a hammer, hoe, or build tool.
     /// </summary>
     public class DetailPieceLOD : MonoBehaviour
     {
-        private static DetailPieceLOD? _instance;
-        public static DetailPieceLOD? Instance => _instance;
+        public static DetailPieceLOD? Instance { get; private set; }
 
         private class TrackedDetailPiece
         {
             public int InstanceId;
             public Piece Piece = null!;
             public Transform Transform = null!;
-            public readonly List<Renderer> Renderers = new List<Renderer>();
+            public Renderer[] AllRenderers = Array.Empty<Renderer>();
+            public readonly List<Renderer> CulledRenderers = new List<Renderer>();
             public bool IsCulled;
 
-            public void SetRenderersEnabled(bool enabled)
+            public void Cull()
             {
-                for (int i = 0; i < Renderers.Count; i++)
+                if (IsCulled) return;
+                CulledRenderers.Clear();
+                for (int i = 0; i < AllRenderers.Length; i++)
                 {
-                    Renderer r = Renderers[i];
-                    if (r != null)
+                    Renderer r = AllRenderers[i];
+                    if (r != null && r.enabled)
                     {
-                        r.enabled = enabled;
+                        r.enabled = false;
+                        CulledRenderers.Add(r);
                     }
                 }
+                IsCulled = true;
+            }
+
+            public void Restore()
+            {
+                if (!IsCulled) return;
+                for (int i = 0; i < CulledRenderers.Count; i++)
+                {
+                    Renderer r = CulledRenderers[i];
+                    if (r != null)
+                    {
+                        r.enabled = true;
+                    }
+                }
+                CulledRenderers.Clear();
+                IsCulled = false;
             }
         }
 
@@ -58,7 +75,7 @@ namespace OptiHouse.Modules
 
         private void Awake()
         {
-            _instance = this;
+            Instance = this;
             ScanExistingPieces();
         }
 
@@ -68,9 +85,9 @@ namespace OptiHouse.Modules
             _trackedPieces.Clear();
             _pieceLookup.Clear();
             _culledDetailCount = 0;
-            if (_instance == this)
+            if (Instance == this)
             {
-                _instance = null;
+                Instance = null;
             }
         }
 
@@ -81,10 +98,9 @@ namespace OptiHouse.Modules
             {
                 for (int i = 0; i < pieces.Length; i++)
                 {
-                    Piece p = pieces[i];
-                    if (p != null)
+                    if (pieces[i] != null)
                     {
-                        RegisterPiece(p);
+                        RegisterPiece(pieces[i]);
                     }
                 }
             }
@@ -124,14 +140,14 @@ namespace OptiHouse.Modules
             int total = _trackedPieces.Count;
             if (total == 0) return;
 
-            Vector3 refPos = GetReferencePosition();
+            Vector3 refPos = OptimizationHelpers.GetReferencePosition();
             float cullDistance = ModConfig.DetailPieceCullDistance != null
                 ? ModConfig.DetailPieceCullDistance.Value
-                : 32.0f;
+                : 38.0f;
 
             float restoreDistance = ModConfig.DetailPieceRestoreDistance != null
-                ? ModConfig.DetailPieceRestoreDistance.Value
-                : Mathf.Max(5f, cullDistance - 6.0f);
+                ? Mathf.Min(ModConfig.DetailPieceRestoreDistance.Value, cullDistance - 2.0f)
+                : Mathf.Max(5f, cullDistance - 8.0f);
 
             float cullDistSq = cullDistance * cullDistance;
             float restoreDistSq = restoreDistance * restoreDistance;
@@ -169,8 +185,7 @@ namespace OptiHouse.Modules
                 {
                     if (!item.IsCulled)
                     {
-                        item.SetRenderersEnabled(false);
-                        item.IsCulled = true;
+                        item.Cull();
                         _culledDetailCount++;
                     }
                 }
@@ -178,8 +193,7 @@ namespace OptiHouse.Modules
                 {
                     if (item.IsCulled)
                     {
-                        item.SetRenderersEnabled(true);
-                        item.IsCulled = false;
+                        item.Restore();
                         if (_culledDetailCount > 0) _culledDetailCount--;
                     }
                 }
@@ -188,7 +202,7 @@ namespace OptiHouse.Modules
 
         public static void RegisterPiece(Piece piece)
         {
-            if (piece == null || piece.gameObject == null) return;
+            if (!OptimizationHelpers.IsValidWorldPiece(piece)) return;
 
             int id = piece.GetInstanceID();
             if (_pieceLookup.ContainsKey(id)) return;
@@ -198,26 +212,14 @@ namespace OptiHouse.Modules
             Renderer[] renderers = piece.GetComponentsInChildren<Renderer>(true);
             if (renderers == null || renderers.Length == 0) return;
 
-            List<Renderer> validRenderers = new List<Renderer>(renderers.Length);
-            for (int i = 0; i < renderers.Length; i++)
-            {
-                Renderer r = renderers[i];
-                if (r != null)
-                {
-                    validRenderers.Add(r);
-                }
-            }
-
-            if (validRenderers.Count == 0) return;
-
             var item = new TrackedDetailPiece
             {
                 InstanceId = id,
                 Piece = piece,
                 Transform = piece.transform,
+                AllRenderers = renderers,
                 IsCulled = false
             };
-            item.Renderers.AddRange(validRenderers);
 
             _trackedPieces.Add(item);
             _pieceLookup[id] = item;
@@ -232,8 +234,7 @@ namespace OptiHouse.Modules
             {
                 if (item.IsCulled)
                 {
-                    item.SetRenderersEnabled(true);
-                    item.IsCulled = false;
+                    item.Restore();
                     if (_culledDetailCount > 0) _culledDetailCount--;
                 }
                 _trackedPieces.Remove(item);
@@ -248,106 +249,77 @@ namespace OptiHouse.Modules
                 TrackedDetailPiece item = _trackedPieces[i];
                 if (item.IsCulled)
                 {
-                    item.SetRenderersEnabled(true);
-                    item.IsCulled = false;
+                    item.Restore();
                 }
             }
             _culledDetailCount = 0;
         }
 
         /// <summary>
-        /// Identifies purely small decorative details, micro-beams, and aesthetic trim.
-        /// NEVER includes structural walls, full roof slopes, floors, doors, stairs, or foundations.
+        /// Identifies strictly small decorative details, micro-beams, crosses, and carvings.
+        /// NEVER includes walls, floors, foundations, pillars, or any roof/ridge tiles.
         /// </summary>
         public static bool IsSmallDetailPiece(Piece piece)
         {
             if (piece == null || piece.gameObject == null) return false;
 
-            string name = piece.gameObject.name.ToLowerInvariant();
+            string name = piece.gameObject.name;
 
-            // 1. HARD SAFETY EXCLUSIONS:
-            // Walls, full roofs, floors, stairs, doors, chests, beds, tables, portals, ships
-            if (name.Contains("wall") ||
-                name.Contains("floor") ||
-                name.Contains("stair") ||
-                name.Contains("door") ||
-                name.Contains("gate") ||
-                name.Contains("portal") ||
-                name.Contains("chest") ||
-                name.Contains("bed") ||
-                name.Contains("chair") ||
-                name.Contains("table") ||
-                name.Contains("ladder") ||
-                name.Contains("stone_") ||
-                name.Contains("blackmarble_") ||
-                name.Contains("ashwood_wall") ||
-                name.Contains("ashwood_floor"))
+            // 1. HARD EXCLUSIONS: main silhouettes, roofs, ridge caps, walls, floors, stone/marble
+            if (OptimizationHelpers.ContainsIgnoreCase(name, "wall") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "floor") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "roof") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "ridge") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "stair") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "door") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "gate") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "portal") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "chest") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "bed") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "chair") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "table") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "ladder") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "pillar") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "stone_") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "blackmarble_") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "ashwood_"))
             {
                 return false;
             }
 
-            // Exclude normal sloped roof slabs (they form the main building silhouette)
-            if (name.Contains("roof") &&
-                !name.Contains("roof_ridge") &&
-                !name.Contains("roof_top") &&
-                !name.Contains("roof_pole") &&
-                !name.Contains("roof_crest") &&
-                !name.Contains("roof_finial") &&
-                !name.Contains("ridge_") &&
-                !name.Contains("straw_roof_top") &&
-                !name.Contains("straw_roof_ridge"))
-            {
-                return false;
-            }
-
-            // 2. Short 1m beams & poles (wood, darkwood, corewood, iron)
-            if (name.Contains("beam_1") ||
-                name.Contains("pole_1") ||
-                name.Contains("beam_26_1") ||
-                name.Contains("beam_45_1") ||
-                name.Contains("pole_core_1") ||
-                name.Contains("beam_core_1") ||
-                name.Contains("darkwood_beam_1") ||
-                name.Contains("darkwood_pole_1") ||
-                name.Contains("iron_beam_1") ||
-                name.Contains("iron_pole_1"))
+            // 2. Short 1m micro-beams & 1m poles (never matches 2m wood_pole2 or 2m/4m beams)
+            if (OptimizationHelpers.ContainsIgnoreCase(name, "beam_1") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "pole_1") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "wood_pole(") ||
+                name.Equals("wood_pole", StringComparison.OrdinalIgnoreCase) ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "pole_core_1") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "beam_core_1") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "darkwood_beam_1") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "darkwood_pole_1") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "iron_beam_1") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "iron_pole_1"))
             {
                 return true;
             }
 
             // 3. Cross beams (26° and 45°)
-            if (name.Contains("cross_26") ||
-                name.Contains("cross_45") ||
-                name.Contains("beam_cross"))
+            if (OptimizationHelpers.ContainsIgnoreCase(name, "cross_26") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "cross_45") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "beam_cross") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "darkwood_cross"))
             {
                 return true;
             }
 
-            // 4. Decorative roof ridges, crests, and finials
-            if (name.Contains("roof_ridge") ||
-                name.Contains("roof_top") ||
-                name.Contains("shingle_ridge") ||
-                name.Contains("straw_roof_top") ||
-                name.Contains("straw_roof_ridge") ||
-                name.Contains("tarp_roof_ridge") ||
-                name.Contains("ridge_26") ||
-                name.Contains("ridge_45") ||
-                name.Contains("ridge_cap") ||
-                name.Contains("roof_crest") ||
-                name.Contains("roof_finial"))
-            {
-                return true;
-            }
-
-            // 5. Aesthetic carvings, dragonheads, brackets, trim, and small arches
-            if (name.Contains("dragonhead") ||
-                name.Contains("carving_raven") ||
-                name.Contains("carving_wolf") ||
-                name.Contains("finial") ||
-                name.Contains("wood_trim") ||
-                name.Contains("bracket") ||
-                name.Contains("wood_arch") ||
-                name.Contains("darkwood_arch"))
+            // 4. Aesthetic carvings, dragonheads, brackets, arches, crests, and finials
+            if (OptimizationHelpers.ContainsIgnoreCase(name, "dragonhead") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "carving_") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "finial") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "wood_crest") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "wood_trim") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "bracket") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "wood_arch") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "darkwood_arch"))
             {
                 return true;
             }
@@ -370,50 +342,11 @@ namespace OptiHouse.Modules
                 return true;
             }
 
-            ItemDrop.ItemData? rightItem = player.RightItem;
-            if (rightItem != null && rightItem.m_shared != null && rightItem.m_shared.m_buildPieces != null)
-            {
-                return true;
-            }
-
-            ItemDrop.ItemData? leftItem = player.LeftItem;
-            if (leftItem != null && leftItem.m_shared != null && leftItem.m_shared.m_buildPieces != null)
-            {
-                return true;
-            }
-
             return false;
-        }
-
-        private static Vector3 GetReferencePosition()
-        {
-            if (Player.m_localPlayer != null)
-            {
-                return Player.m_localPlayer.transform.position;
-            }
-            Camera mainCam = Utils.GetMainCamera();
-            if (mainCam != null)
-            {
-                return mainCam.transform.position;
-            }
-            return Vector3.zero;
         }
     }
 
     #region Harmony Patches
-
-    [HarmonyPatch(typeof(OptiHousePlugin), "Awake")]
-    public static class DetailPieceLOD_Plugin_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(OptiHousePlugin __instance)
-        {
-            if (__instance != null && __instance.gameObject.GetComponent<DetailPieceLOD>() == null)
-            {
-                __instance.gameObject.AddComponent<DetailPieceLOD>();
-            }
-        }
-    }
 
     [HarmonyPatch(typeof(Piece), "Awake")]
     public static class DetailPieceLOD_Piece_Awake_Patch
@@ -432,19 +365,6 @@ namespace OptiHouse.Modules
         public static void Postfix(Piece __instance)
         {
             DetailPieceLOD.UnregisterPiece(__instance);
-        }
-    }
-
-    [HarmonyPatch(typeof(Player), "PieceRayTest")]
-    public static class DetailPieceLOD_PieceRayTest_Patch
-    {
-        [HarmonyPrefix]
-        public static void Prefix(Player __instance)
-        {
-            if (__instance == Player.m_localPlayer && DetailPieceLOD.CulledDetailPieces > 0)
-            {
-                DetailPieceLOD.RestoreAllRenderers();
-            }
         }
     }
 

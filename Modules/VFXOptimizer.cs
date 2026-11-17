@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using OptiHouse.Configuration;
 using UnityEngine;
@@ -8,27 +9,28 @@ using UnityEngine.Animations;
 namespace OptiHouse.Modules
 {
     /// <summary>
-    /// Optimizes and suppresses heavy particle bursts, terraforming VFX, and destruction debris.
-    /// Accelerates particle dissipation so particles vanish rapidly instead of lingering on screen.
-    /// Safely preserves sound effects (sfx), item drops, and game logic.
+    /// Particle & Visual Effect Optimizer for OptiHouse.
+    /// - Suppresses heavy hoe/cultivator dust bursts and WearNTear demolition debris chunks.
+    /// - Throttles distant (>30m) ambient sparks/dust/smoke bursts.
+    /// - Accelerates temporary particle dissipation cleanly ONCE per spawned effect GameObject
+    ///   (fixed triple-scaling bug). Never suppresses audio (sfx) or resource drops.
     /// </summary>
     public static class VFXOptimizer
     {
-        /// <summary>
-        /// Applies accelerated particle dissipation to any visual effect GameObject.
-        /// Scales down startLifetimeMultiplier and scales up simulationSpeed so particles
-        /// pop, disperse, and vanish quickly. Also shortens TimedDestruction timeout.
-        /// </summary>
+        private sealed class FadeAppliedMarker { }
+        private static readonly ConditionalWeakTable<GameObject, FadeAppliedMarker> _fadedObjects = new();
+
         public static void ApplyFastParticleFade(GameObject? go)
         {
-            if (go == null || !OptiHousePlugin.IsOptimizationActive)
-                return;
+            if (go == null || !OptiHousePlugin.IsOptimizationActive) return;
+            if (ModConfig.EnableFastParticleFade == null || !ModConfig.EnableFastParticleFade.Value) return;
 
-            if (ModConfig.EnableFastParticleFade == null || !ModConfig.EnableFastParticleFade.Value)
-                return;
+            // Ensure fast fade scaling is applied strictly ONCE per effect instance
+            if (_fadedObjects.TryGetValue(go, out _)) return;
+            _fadedObjects.Add(go, new FadeAppliedMarker());
 
-            float lifetimeMult = ModConfig.ParticleLifetimeMultiplier != null ? ModConfig.ParticleLifetimeMultiplier.Value : 0.35f;
-            float maxLifetime = ModConfig.MaxParticleLifetimeSeconds != null ? ModConfig.MaxParticleLifetimeSeconds.Value : 2.0f;
+            float lifetimeMult = ModConfig.ParticleLifetimeMultiplier != null ? ModConfig.ParticleLifetimeMultiplier.Value : 0.45f;
+            float maxLifetime = ModConfig.MaxParticleLifetimeSeconds != null ? ModConfig.MaxParticleLifetimeSeconds.Value : 2.5f;
             float speedMult = ModConfig.ParticleSimulationSpeed != null ? ModConfig.ParticleSimulationSpeed.Value : 1.5f;
 
             ParticleSystem[] particleSystems = go.GetComponentsInChildren<ParticleSystem>(true);
@@ -51,14 +53,11 @@ namespace OptiHouse.Modules
 
         public static bool ShouldSuppressEffect(string prefabName, Vector3 effectPos)
         {
-            if (string.IsNullOrEmpty(prefabName))
-                return false;
+            if (string.IsNullOrEmpty(prefabName)) return false;
 
             // Never suppress audio cues
-            if (prefabName.StartsWith("sfx", StringComparison.OrdinalIgnoreCase))
-                return false;
+            if (prefabName.StartsWith("sfx", StringComparison.OrdinalIgnoreCase)) return false;
 
-            // 1. Cultivation, hoeing, terraforming particles
             if (ModConfig.SuppressCultivationParticles != null &&
                 ModConfig.SuppressCultivationParticles.Value &&
                 IsCultivationOrHoeEffect(prefabName))
@@ -66,7 +65,6 @@ namespace OptiHouse.Modules
                 return true;
             }
 
-            // 2. Piece destruction, demolition, debris particles
             if (ModConfig.SuppressDestructionParticles != null &&
                 ModConfig.SuppressDestructionParticles.Value &&
                 IsDestructionOrDebrisEffect(prefabName))
@@ -74,19 +72,15 @@ namespace OptiHouse.Modules
                 return true;
             }
 
-            // 3. Distance throttling for ambient building VFX
             if (ModConfig.VfxThrottlingDistance != null &&
-                ModConfig.VfxThrottlingDistance.Value > 0f)
+                ModConfig.VfxThrottlingDistance.Value > 0f &&
+                IsAmbientBuildingVfx(prefabName) &&
+                OptimizationHelpers.TryGetReferencePosition(out Vector3 refPos))
             {
-                Camera cam = Utils.GetMainCamera();
-                if (cam != null)
+                float maxDist = ModConfig.VfxThrottlingDistance.Value;
+                if ((effectPos - refPos).sqrMagnitude > maxDist * maxDist)
                 {
-                    float distSq = (effectPos - cam.transform.position).sqrMagnitude;
-                    float maxDist = ModConfig.VfxThrottlingDistance.Value;
-                    if (distSq > maxDist * maxDist && IsAmbientBuildingVfx(prefabName))
-                    {
-                        return true;
-                    }
+                    return true;
                 }
             }
 
@@ -95,60 +89,46 @@ namespace OptiHouse.Modules
 
         public static bool IsCultivationOrHoeEffect(string name)
         {
-            if (!name.Contains("vfx", StringComparison.OrdinalIgnoreCase))
-                return false;
+            if (!OptimizationHelpers.ContainsIgnoreCase(name, "vfx")) return false;
 
-            return name.Contains("hoe", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("cultivat", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("terrain", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("dirt", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("level", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("smooth", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("raise", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("pave", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("grass", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("flatten", StringComparison.OrdinalIgnoreCase);
+            return OptimizationHelpers.ContainsIgnoreCase(name, "hoe") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "cultivat") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "terrain") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "level") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "smooth") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "raise") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "pave") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "flatten");
         }
 
         public static bool IsDestructionOrDebrisEffect(string name)
         {
-            if (!name.Contains("vfx", StringComparison.OrdinalIgnoreCase))
-                return false;
+            if (!OptimizationHelpers.ContainsIgnoreCase(name, "vfx")) return false;
 
-            return name.Contains("wood_break", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("wood_destroyed", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("stone_break", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("stone_destroyed", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("sawdust", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("rock_destroy", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("iron_break", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("marble_break", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("ashstone_break", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("debris", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("fragment", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("fracture", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("rubble", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("wnt_destroyed", StringComparison.OrdinalIgnoreCase);
+            return OptimizationHelpers.ContainsIgnoreCase(name, "wood_break") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "wood_destroyed") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "stone_break") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "stone_destroyed") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "sawdust") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "iron_break") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "marble_break") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "ashstone_break") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "debris") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "rubble") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "wnt_destroyed");
         }
 
         public static bool IsAmbientBuildingVfx(string name)
         {
-            if (!name.Contains("vfx", StringComparison.OrdinalIgnoreCase))
-                return false;
+            if (!OptimizationHelpers.ContainsIgnoreCase(name, "vfx")) return false;
 
-            return name.Contains("spark", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("dust", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("smoke", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("ash", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("break", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("hit", StringComparison.OrdinalIgnoreCase);
+            return OptimizationHelpers.ContainsIgnoreCase(name, "spark") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "dust") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "smoke") ||
+                   OptimizationHelpers.ContainsIgnoreCase(name, "ash");
         }
     }
 
-    /// <summary>
-    /// Harmony patch on EffectList.Create to filter out unwanted particle bursts
-    /// while leaving sound effects and valid visual effects intact.
-    /// </summary>
     [HarmonyPatch(typeof(EffectList), nameof(EffectList.Create))]
     public static class EffectList_Create_Patch
     {
@@ -175,7 +155,6 @@ namespace OptiHouse.Modules
                 return true;
             }
 
-            // Quick check: do any effects in this list need suppression?
             bool hasSuppressed = false;
             for (int i = 0; i < __instance.m_effectPrefabs.Length; i++)
             {
@@ -189,10 +168,9 @@ namespace OptiHouse.Modules
 
             if (!hasSuppressed)
             {
-                return true; // Let vanilla run untouched
+                return true;
             }
 
-            // Selective instantiation: create only non-suppressed effects (e.g. sfx audio)
             List<GameObject> list = new List<GameObject>();
             for (int i = 0; i < __instance.m_effectPrefabs.Length; i++)
             {
@@ -246,8 +224,7 @@ namespace OptiHouse.Modules
                 {
                     if (baseParent != null && effectData.m_inheritParentScale)
                     {
-                        Vector3 localScale = baseParent.localScale * scale;
-                        gameObject.transform.localScale = localScale;
+                        gameObject.transform.localScale = baseParent.localScale * scale;
                     }
                     else
                     {
@@ -289,9 +266,6 @@ namespace OptiHouse.Modules
                     parentConstraint.constraintActive = true;
                 }
 
-                // Apply fast particle dissipation
-                VFXOptimizer.ApplyFastParticleFade(gameObject);
-
                 list.Add(gameObject);
             }
 
@@ -313,10 +287,6 @@ namespace OptiHouse.Modules
         }
     }
 
-    /// <summary>
-    /// Harmony patch on TimedDestruction.Awake to accelerate the dissipation of all temporary
-    /// visual effects in Valheim (combat impacts, ground dust, building debris, sparks).
-    /// </summary>
     [HarmonyPatch(typeof(TimedDestruction), "Awake")]
     public static class TimedDestruction_Awake_Patch
     {
@@ -330,16 +300,11 @@ namespace OptiHouse.Modules
         }
     }
 
-    /// <summary>
-    /// Harmony patch on Destructible.CreateFragments to prevent massive physics chunks
-    /// from lagging the game when building pieces or structures are destroyed.
-    /// Item drops and resource refunds are completely unaffected.
-    /// </summary>
     [HarmonyPatch(typeof(Destructible), nameof(Destructible.CreateFragments))]
     public static class Destructible_CreateFragments_Patch
     {
         [HarmonyPrefix]
-        public static bool Prefix(GameObject rootObject, bool visibleOnly)
+        public static bool Prefix(GameObject rootObject)
         {
             if (!OptiHousePlugin.IsOptimizationActive ||
                 ModConfig.EnableVfxOptimization == null ||
@@ -356,17 +321,13 @@ namespace OptiHouse.Modules
 
             if (rootObject != null &&
                 ModConfig.VfxThrottlingDistance != null &&
-                ModConfig.VfxThrottlingDistance.Value > 0f)
+                ModConfig.VfxThrottlingDistance.Value > 0f &&
+                OptimizationHelpers.TryGetReferencePosition(out Vector3 refPos))
             {
-                Camera cam = Utils.GetMainCamera();
-                if (cam != null)
+                float maxDist = ModConfig.VfxThrottlingDistance.Value;
+                if ((rootObject.transform.position - refPos).sqrMagnitude > maxDist * maxDist)
                 {
-                    float distSq = (rootObject.transform.position - cam.transform.position).sqrMagnitude;
-                    float maxDist = ModConfig.VfxThrottlingDistance.Value;
-                    if (distSq > maxDist * maxDist)
-                    {
-                        return false;
-                    }
+                    return false;
                 }
             }
 

@@ -13,7 +13,7 @@ namespace OptiHouse
     {
         public const string ModGUID = "com.unclebug.optihouse";
         public const string ModName = "OptiHouse";
-        public const string ModVersion = "1.4.1";
+        public const string ModVersion = "1.5.0";
 
         public static OptiHousePlugin Instance { get; private set; } = null!;
         public static ManualLogSource Log => Instance.Logger;
@@ -30,26 +30,27 @@ namespace OptiHouse
             // 1. Initialize configuration bindings
             ModConfig.Init(Config);
 
-            // 2. Safety: restore all colliders in case any were disabled previously
-            DecorativeColliderOptimizer.RestoreAllColliders();
-
-            // 3. Initialize boot.config engine tweaks (multi-threaded gfx jobs)
+            // 2. Inspect/apply engine boot.config settings (strictly opt-in)
             BootConfigTweaker.Initialize();
 
-            // 4. Initialize real-time diagnostics and benchmark HUD
-            gameObject.AddComponent<OptiHouseHUD>();
+            // 3. Apply all Harmony patches first
+            _harmony = new Harmony(ModGUID);
+            _harmony.PatchAll();
 
-            // 5. Initialize optimization component modules
+            // 4. Attach real-time benchmark HUD and ALL optimization subsystems directly
+            gameObject.AddComponent<OptiHouseHUD>();
+            gameObject.AddComponent<LightShadowOptimizer>();
+            gameObject.AddComponent<PieceShadowCuller>();
+            gameObject.AddComponent<ClothOptimizer>();
+            gameObject.AddComponent<ItemStandOptimizer>();
+            gameObject.AddComponent<TamedAnimalOptimizer>();
+            gameObject.AddComponent<CraftingStationOptimizer>();
             gameObject.AddComponent<InteriorOcclusionOptimizer>();
             gameObject.AddComponent<DetailPieceLOD>();
             gameObject.AddComponent<ItemDropOptimizer>();
             gameObject.AddComponent<TerrainOptimizationHelper>();
 
-            // 5. Initialize Harmony patches
-            _harmony = new Harmony(ModGUID);
-            _harmony.PatchAll();
-
-            Log.LogInfo($"[{ModName}] v{ModVersion} initialized successfully. Special thanks to DaymonMontage (https://twitch.tv/daymonmontage)!");
+            Log.LogInfo($"[{ModName}] v{ModVersion} initialized (all 10 optimization subsystems active). Special thanks to DaymonMontage (https://twitch.tv/daymonmontage)!");
         }
 
         private void Update()
@@ -58,8 +59,6 @@ namespace OptiHouse
                 ModConfig.ToggleHotkey.Value != KeyCode.None &&
                 Input.GetKeyDown(ModConfig.ToggleHotkey.Value))
             {
-                // If Shift+Hotkey is pressed and HUD hotkey uses the same key with RequireShift,
-                // do not trigger master optimization toggle
                 bool shiftHeld = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
                 bool hudUsesSameKeyWithShift = ModConfig.BenchmarkHudHotkey != null &&
                                                ModConfig.BenchmarkHudHotkey.Value == ModConfig.ToggleHotkey.Value &&

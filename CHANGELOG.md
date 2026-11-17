@@ -2,6 +2,25 @@
 
 All notable changes to **OptiHouse** will be documented in this file.
 
+## [1.5.0] - 2026-11-17 (DEEP ARCHITECTURAL OVERHAUL & REAL FPS BREAKTHROUGH)
+### Fixed (Critical Audit Fixes)
+- **Revived 6 Dead Subsystems:** Fixed critical Harmony initialization bug where `LightShadowOptimizer`, `PieceShadowCuller`, `ClothOptimizer`, `ItemStandOptimizer`, `TamedAnimalOptimizer`, and `CraftingStationOptimizer` used `[HarmonyPatch(typeof(OptiHousePlugin), "Awake")]` after `Awake()` was already executing — causing their `MonoBehaviour.Update()` loops to **never run**. All 10 subsystems now attach directly and reliably in `OptiHousePlugin.Awake()`.
+- **Fixed ItemStand & Banner Freeze Bug:** Because `ItemStandOptimizer` and `ClothOptimizer` `Update()` loops previously never ran, objects loaded beyond cull distance stayed frozen/dim forever when approached. Now smoothly restore as you walk near them.
+- **No More Roof Holes or Disappearing Fireplaces:** Removed roof ridge/peak tiles (`roof_ridge`, `roof_top`, `straw_roof_top`) from `DetailPieceLOD` and explicitly excluded all `Fireplace`/light fixtures (`hearth`, `brazier`, `sconce`, `lantern`) from `InteriorOcclusionOptimizer`. Raised default `InteriorCullDistance` from `18m` to `26m` and `DetailPieceCullDistance` from `32m` to `38m`.
+- **Snapshot-Safe Renderer & Shadow Restoration:** Both `DetailPieceLOD`, `InteriorOcclusionOptimizer`, `ItemStandOptimizer`, and `PieceShadowCuller` now snapshot original `enabled` / `ShadowCastingMode` states instead of blindly turning on vanilla-hidden sub-renderers (`WearNTear` damage variants or empty stand slots).
+- **Eliminated Multiplayer ZDO Desync Risk:** Removed the $O(N^2)$ `ItemDrop` auto-stacker (which destroyed unowned ZDOs before async ownership) and replaced it with zero-allocation component caching and safe `Rigidbody.Sleep()`.
+- **Fixed Triple-Applied VFX Scaling Bug:** Guarded `VFXOptimizer.ApplyFastParticleFade` so temporary effects are faded strictly once per spawned object instead of 3x ($0.35^3$).
+- **Fixed `WearNTear.UpdateCover` Real-Time Interval:** Fixed `WearNTearUpdater` single-frame `dt` accumulation (~600s delay) to use accurate real seconds (`Time.time`), and gated `Piece.Awake` hooks against `ghost` placement previews.
+- **Eliminated Unconditional Raycast Leak & String Churn:** Rate-limited open-air enclosure raycasts in `InteriorOcclusionOptimizer` to once per 15s (on `piece` layer only) and replaced `.ToLowerInvariant()` calls with zero-allocation comparisons.
+- **Opt-In `boot.config`:** Changed `EnableGfxJobsTweak` default to `false` so OptiHouse never mutates game files outside `BepInEx/` unless requested.
+
+### Added (High-Impact Performance Gains)
+- **Native Forward Point-Light Cap (`LightLod.m_lightLimit = 28`):** Unlocks Valheim's built-in smooth point-light limit (vanilla leaves it at `-1` unlimited), cutting up to 50% of redundant `ForwardAdd` GPU/CPU geometry passes in torch-lit halls.
+- **Non-Ashlands `WearNTear` Loop Skip (`SkipNonAshlandsMaterialUpdates`):** Skips `WearNTearUpdater`'s per-second `UpdateAshlandsMaterialValues` iteration across thousands of non-Ashlands base pieces when burn/lava timers are zero.
+- **`Fireplace.CheckEnv` Raycast Throttling (`ThrottleFireplaceEnvChecks`):** Throttles terrain/cover raycasts on settled torches and hearths from 4s to 20s.
+- **Distant `LightFlicker` Culling (`CullDistantLightFlicker`):** Pauses `LightFlicker` sin/cos math and transform updates beyond 22m while automatically deferring to VPO (`VPOLightFlicker`) when VPO is installed.
+- **Beehive Support & Accurate Camera Distance:** Added `Beehive` buzzing/particle culling to `CraftingStationOptimizer`, and switched distance reference checks to the active camera (`Utils.GetMainCamera()`).
+
 ## [1.4.1] - 2026-11-16 (CRITICAL EMERGENCY HOTFIX)
 ### Fixed
 - **CRITICAL STRUCTURAL COLLAPSE BUGFIX:**

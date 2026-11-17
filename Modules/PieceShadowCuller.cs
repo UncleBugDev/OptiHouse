@@ -8,35 +8,37 @@ namespace OptiHouse.Modules
 {
     /// <summary>
     /// Piece Shadow Culler for OptiHouse.
-    /// Automatically manages real-time shadow casting on small structural and decorative elements
-    /// (beams &lt;= 2m, iron bars, grates, decorative furniture, poles).
-    /// Disables shadow casting beyond a configurable distance (default 15m), drastically slashing
-    /// shadow map draw calls in high-density bases while preserving visual quality up close.
+    /// Disables real-time shadow casting on small structural pieces and props beyond PieceShadowCullDistance
+    /// while preserving original ShadowCastingMode up close. Never disables mesh renderers or colliders.
     /// </summary>
     public class PieceShadowCuller : MonoBehaviour
     {
-        private static PieceShadowCuller? _instance;
-        public static PieceShadowCuller? Instance => _instance;
+        public static PieceShadowCuller? Instance { get; private set; }
 
         private class TrackedPiece
         {
+            public int PieceId;
             public Piece Piece = null!;
             public Transform Transform = null!;
             public MeshRenderer Renderer = null!;
+            public ShadowCastingMode OrigShadowMode;
             public bool ShadowsOff;
         }
 
         private static readonly List<TrackedPiece> _trackedPieces = new List<TrackedPiece>();
         private static readonly Dictionary<int, List<TrackedPiece>> _pieceLookup = new Dictionary<int, List<TrackedPiece>>();
 
+        private static int _culledShadowCount;
         private int _currentIndex;
         private bool _wasOptimizationActive = true;
 
         public static int TrackedPieceCount => _trackedPieces.Count;
+        public static int CulledShadowCount => _culledShadowCount;
 
         private void Awake()
         {
-            _instance = this;
+            Instance = this;
+            ScanExistingPieces();
         }
 
         private void OnDestroy()
@@ -44,9 +46,25 @@ namespace OptiHouse.Modules
             RestoreAllShadows();
             _trackedPieces.Clear();
             _pieceLookup.Clear();
-            if (_instance == this)
+            _culledShadowCount = 0;
+            if (Instance == this)
             {
-                _instance = null;
+                Instance = null;
+            }
+        }
+
+        public static void ScanExistingPieces()
+        {
+            Piece[] pieces = FindObjectsByType<Piece>(FindObjectsSortMode.None);
+            if (pieces != null)
+            {
+                for (int i = 0; i < pieces.Length; i++)
+                {
+                    if (pieces[i] != null)
+                    {
+                        RegisterPiece(pieces[i]);
+                    }
+                }
             }
         }
 
@@ -73,14 +91,13 @@ namespace OptiHouse.Modules
             int total = _trackedPieces.Count;
             if (total == 0) return;
 
-            Vector3 refPos = GetReferencePosition();
+            Vector3 refPos = OptimizationHelpers.GetReferencePosition();
             float cullDistance = ModConfig.PieceShadowCullDistance != null
                 ? ModConfig.PieceShadowCullDistance.Value
-                : 15.0f;
+                : 18.0f;
 
             float cullDistSq = cullDistance * cullDistance;
-            // 2.5m hysteresis margin prevents rapid shadow toggle flickering at boundary
-            float restoreDistance = Mathf.Max(0f, cullDistance - 2.5f);
+            float restoreDistance = Mathf.Max(0f, cullDistance - 3.0f);
             float restoreDistSq = restoreDistance * restoreDistance;
 
             int batchSize = Mathf.Min(300, total);
@@ -95,6 +112,8 @@ namespace OptiHouse.Modules
                 TrackedPiece item = _trackedPieces[_currentIndex];
                 if (item.Renderer == null || item.Transform == null || item.Piece == null)
                 {
+                    if (item.ShadowsOff && _culledShadowCount > 0) _culledShadowCount--;
+                    _pieceLookup.Remove(item.PieceId);
                     _trackedPieces.RemoveAt(_currentIndex);
                     if (_currentIndex > 0) _currentIndex--;
                     continue;
@@ -113,14 +132,16 @@ namespace OptiHouse.Modules
                     {
                         item.Renderer.shadowCastingMode = ShadowCastingMode.Off;
                         item.ShadowsOff = true;
+                        _culledShadowCount++;
                     }
                 }
                 else if (sqrDist < restoreDistSq)
                 {
                     if (item.ShadowsOff)
                     {
-                        item.Renderer.shadowCastingMode = ShadowCastingMode.On;
+                        item.Renderer.shadowCastingMode = item.OrigShadowMode;
                         item.ShadowsOff = false;
+                        if (_culledShadowCount > 0) _culledShadowCount--;
                     }
                 }
             }
@@ -128,26 +149,30 @@ namespace OptiHouse.Modules
 
         public static void RegisterPiece(Piece piece)
         {
-            if (piece == null) return;
+            if (!OptimizationHelpers.IsValidWorldPiece(piece)) return;
+
+            int pieceId = piece.GetInstanceID();
+            if (_pieceLookup.ContainsKey(pieceId)) return;
 
             MeshRenderer[] renderers = piece.GetComponentsInChildren<MeshRenderer>(true);
             if (renderers == null || renderers.Length == 0) return;
 
-            int pieceId = piece.GetInstanceID();
             List<TrackedPiece>? list = null;
 
             for (int i = 0; i < renderers.Length; i++)
             {
                 MeshRenderer mr = renderers[i];
-                if (mr == null) continue;
+                if (mr == null || mr.shadowCastingMode == ShadowCastingMode.Off) continue;
 
                 if (IsSmallStructuralPiece(piece, mr))
                 {
                     var item = new TrackedPiece
                     {
+                        PieceId = pieceId,
                         Piece = piece,
                         Transform = mr.transform,
                         Renderer = mr,
+                        OrigShadowMode = mr.shadowCastingMode,
                         ShadowsOff = false
                     };
 
@@ -172,7 +197,14 @@ namespace OptiHouse.Modules
             {
                 for (int i = 0; i < list.Count; i++)
                 {
-                    _trackedPieces.Remove(list[i]);
+                    TrackedPiece item = list[i];
+                    if (item.ShadowsOff && _culledShadowCount > 0) _culledShadowCount--;
+                    if (item.Renderer != null && item.ShadowsOff)
+                    {
+                        item.Renderer.shadowCastingMode = item.OrigShadowMode;
+                        item.ShadowsOff = false;
+                    }
+                    _trackedPieces.Remove(item);
                 }
                 _pieceLookup.Remove(pieceId);
             }
@@ -183,102 +215,68 @@ namespace OptiHouse.Modules
             for (int i = 0; i < _trackedPieces.Count; i++)
             {
                 TrackedPiece item = _trackedPieces[i];
-                if (item.Renderer != null)
+                if (item.ShadowsOff && item.Renderer != null)
                 {
-                    item.Renderer.shadowCastingMode = ShadowCastingMode.On;
+                    item.Renderer.shadowCastingMode = item.OrigShadowMode;
                     item.ShadowsOff = false;
                 }
             }
+            _culledShadowCount = 0;
         }
 
         public static bool IsSmallStructuralPiece(Piece piece, MeshRenderer renderer)
         {
             if (piece == null || renderer == null) return false;
 
-            string name = piece.gameObject.name.ToLowerInvariant();
+            string name = piece.gameObject.name;
 
-            // Explicit exclusions: Large walls, roofs, floors, ground pieces, pillars
-            if (name.Contains("wall") ||
-                name.Contains("roof") ||
-                name.Contains("floor") ||
-                name.Contains("gate") ||
-                name.Contains("stone_") ||
-                name.Contains("blackmarble_") ||
-                name.Contains("portal") ||
-                name.Contains("pillar") ||
-                name.Contains("chimney") ||
-                name.Contains("stair"))
+            if (OptimizationHelpers.ContainsIgnoreCase(name, "wall") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "roof") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "floor") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "gate") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "stone_") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "blackmarble_") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "portal") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "pillar") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "chimney") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "stair"))
             {
                 return false;
             }
 
-            // Small structural pieces by name:
-            if (name.Contains("beam") ||
-                name.Contains("pole") ||
-                name.Contains("post") ||
-                name.Contains("bar") ||
-                name.Contains("cage") ||
-                name.Contains("grate") ||
-                name.Contains("fence") ||
-                name.Contains("ladder") ||
-                name.Contains("chain") ||
-                name.Contains("stand") ||
-                name.Contains("decor") ||
-                name.Contains("chair") ||
-                name.Contains("stool") ||
-                name.Contains("bench") ||
-                name.Contains("table") ||
-                name.Contains("sign") ||
-                name.Contains("rug") ||
-                name.Contains("sconce") ||
-                name.Contains("lantern") ||
-                name.Contains("banner"))
+            if (OptimizationHelpers.ContainsIgnoreCase(name, "beam") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "pole") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "post") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "bar") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "cage") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "grate") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "fence") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "ladder") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "chain") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "stand") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "decor") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "chair") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "stool") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "bench") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "table") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "sign") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "rug") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "sconce") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "lantern") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "banner") ||
+                OptimizationHelpers.ContainsIgnoreCase(name, "chest"))
             {
                 return true;
             }
 
-            // Fallback bounding box size check: max dimension <= 2.8m (1m, 2m beams, grates)
             Bounds bounds = renderer.bounds;
             float maxDim = Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z));
-            return maxDim <= 2.8f;
-        }
-
-        private static Vector3 GetReferencePosition()
-        {
-            if (Player.m_localPlayer != null)
-            {
-                return Player.m_localPlayer.transform.position;
-            }
-            Camera mainCam = Utils.GetMainCamera();
-            if (mainCam != null)
-            {
-                return mainCam.transform.position;
-            }
-            return Vector3.zero;
+            return maxDim <= 2.5f;
         }
     }
 
     #region Harmony Patches
 
-    /// <summary>
-    /// Attach PieceShadowCuller to the mod plugin GameObject on startup.
-    /// </summary>
-    [HarmonyPatch(typeof(OptiHousePlugin), "Awake")]
-    public static class PieceShadowCuller_Plugin_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(OptiHousePlugin __instance)
-        {
-            if (__instance != null && __instance.gameObject.GetComponent<PieceShadowCuller>() == null)
-            {
-                __instance.gameObject.AddComponent<PieceShadowCuller>();
-            }
-        }
-    }
-
-    /// <summary>
-    /// Intercepts Piece.Awake to register small structural elements for shadow culling.
-    /// </summary>
     [HarmonyPatch(typeof(Piece), "Awake")]
     public static class Piece_Awake_Patch
     {
@@ -289,9 +287,6 @@ namespace OptiHouse.Modules
         }
     }
 
-    /// <summary>
-    /// Intercepts Piece.OnDestroy to cleanly unregister deleted pieces.
-    /// </summary>
     [HarmonyPatch(typeof(Piece), "OnDestroy")]
     public static class Piece_OnDestroy_Patch
     {
