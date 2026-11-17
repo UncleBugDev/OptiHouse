@@ -541,10 +541,11 @@ namespace OptiHouse.Modules
                 return true;
             }
 
-            if (OptimizationHelpers.TryGetReferencePosition(out Vector3 refPos))
+            if (OptimizationHelpers.TryGetCameraView(out Vector3 camPos, out Vector3 camForward))
             {
-                float sqrDist = (__instance.transform.position - refPos).sqrMagnitude;
-                if (sqrDist > 484f) // 22m
+                Vector3 pos = __instance.transform.position;
+                float sqrDist = (pos - camPos).sqrMagnitude;
+                if (sqrDist > 400f || OptimizationHelpers.IsBehindCamera(pos, camPos, camForward, 36f)) // >20m or >6m behind camera
                 {
                     LightShadowOptimizer.FlickersSkipped++;
                     return false;

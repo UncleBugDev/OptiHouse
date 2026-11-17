@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using HarmonyLib;
 using OptiHouse.Configuration;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -7,64 +6,81 @@ using UnityEngine.Rendering;
 namespace OptiHouse.Modules
 {
     /// <summary>
-    /// Piece Shadow Culler for OptiHouse.
-    /// Disables real-time shadow casting on small structural pieces and props beyond PieceShadowCullDistance
-    /// while preserving original ShadowCastingMode up close. Never disables mesh renderers or colliders.
+    /// Piece Shadow Culler for OptiHouse v2.0.
+    /// Groups all shadow-casting MeshRenderers per Piece and uses O(1) swap-back unregistration
+    /// to eliminate O(N^2) portal/zone-unload freezes. Preserves original ShadowCastingMode.
     /// </summary>
     public class PieceShadowCuller : MonoBehaviour
     {
         public static PieceShadowCuller? Instance { get; private set; }
 
-        private class TrackedPiece
+        private struct RendererShadowBackup
+        {
+            public MeshRenderer Renderer;
+            public ShadowCastingMode OrigMode;
+        }
+
+        private class TrackedShadowPiece
         {
             public int PieceId;
             public Piece Piece = null!;
             public Transform Transform = null!;
-            public MeshRenderer Renderer = null!;
-            public ShadowCastingMode OrigShadowMode;
+            public readonly List<RendererShadowBackup> Renderers = new List<RendererShadowBackup>(2);
             public bool ShadowsOff;
+
+            public void SetShadowsOff()
+            {
+                if (ShadowsOff) return;
+                for (int i = 0; i < Renderers.Count; i++)
+                {
+                    MeshRenderer mr = Renderers[i].Renderer;
+                    if (mr != null)
+                    {
+                        mr.shadowCastingMode = ShadowCastingMode.Off;
+                    }
+                }
+                ShadowsOff = true;
+            }
+
+            public void RestoreShadows()
+            {
+                if (!ShadowsOff) return;
+                for (int i = 0; i < Renderers.Count; i++)
+                {
+                    MeshRenderer mr = Renderers[i].Renderer;
+                    if (mr != null)
+                    {
+                        mr.shadowCastingMode = Renderers[i].OrigMode;
+                    }
+                }
+                ShadowsOff = false;
+            }
         }
 
-        private static readonly List<TrackedPiece> _trackedPieces = new List<TrackedPiece>();
-        private static readonly Dictionary<int, List<TrackedPiece>> _pieceLookup = new Dictionary<int, List<TrackedPiece>>();
+        private static readonly List<TrackedShadowPiece> _pieces = new List<TrackedShadowPiece>();
+        private static readonly Dictionary<int, int> _indexMap = new Dictionary<int, int>();
 
         private static int _culledShadowCount;
         private int _currentIndex;
         private bool _wasOptimizationActive = true;
 
-        public static int TrackedPieceCount => _trackedPieces.Count;
+        public static int TrackedPieceCount => _pieces.Count;
         public static int CulledShadowCount => _culledShadowCount;
 
         private void Awake()
         {
             Instance = this;
-            ScanExistingPieces();
         }
 
         private void OnDestroy()
         {
             RestoreAllShadows();
-            _trackedPieces.Clear();
-            _pieceLookup.Clear();
+            _pieces.Clear();
+            _indexMap.Clear();
             _culledShadowCount = 0;
             if (Instance == this)
             {
                 Instance = null;
-            }
-        }
-
-        public static void ScanExistingPieces()
-        {
-            Piece[] pieces = FindObjectsByType<Piece>(FindObjectsSortMode.None);
-            if (pieces != null)
-            {
-                for (int i = 0; i < pieces.Length; i++)
-                {
-                    if (pieces[i] != null)
-                    {
-                        RegisterPiece(pieces[i]);
-                    }
-                }
             }
         }
 
@@ -88,7 +104,7 @@ namespace OptiHouse.Modules
 
             _wasOptimizationActive = true;
 
-            int total = _trackedPieces.Count;
+            int total = _pieces.Count;
             if (total == 0) return;
 
             Vector3 refPos = OptimizationHelpers.GetReferencePosition();
@@ -100,29 +116,22 @@ namespace OptiHouse.Modules
             float restoreDistance = Mathf.Max(0f, cullDistance - 3.0f);
             float restoreDistSq = restoreDistance * restoreDistance;
 
-            int batchSize = Mathf.Min(300, total);
+            int batchSize = Mathf.Min(350, total);
             for (int i = 0; i < batchSize; i++)
             {
+                if (_pieces.Count == 0) break;
                 _currentIndex++;
-                if (_currentIndex >= _trackedPieces.Count)
-                {
-                    _currentIndex = 0;
-                }
+                if (_currentIndex >= _pieces.Count) _currentIndex = 0;
 
-                TrackedPiece item = _trackedPieces[_currentIndex];
-                if (item.Renderer == null || item.Transform == null || item.Piece == null)
+                TrackedShadowPiece item = _pieces[_currentIndex];
+                if (item.Piece == null || item.Transform == null)
                 {
-                    if (item.ShadowsOff && _culledShadowCount > 0) _culledShadowCount--;
-                    _pieceLookup.Remove(item.PieceId);
-                    _trackedPieces.RemoveAt(_currentIndex);
+                    SwapRemoveAt(_currentIndex);
                     if (_currentIndex > 0) _currentIndex--;
                     continue;
                 }
 
-                if (!item.Renderer.enabled || !item.Renderer.gameObject.activeInHierarchy)
-                {
-                    continue;
-                }
+                if (!item.Piece.gameObject.activeInHierarchy) continue;
 
                 float sqrDist = (item.Transform.position - refPos).sqrMagnitude;
 
@@ -130,8 +139,7 @@ namespace OptiHouse.Modules
                 {
                     if (!item.ShadowsOff)
                     {
-                        item.Renderer.shadowCastingMode = ShadowCastingMode.Off;
-                        item.ShadowsOff = true;
+                        item.SetShadowsOff();
                         _culledShadowCount++;
                     }
                 }
@@ -139,95 +147,106 @@ namespace OptiHouse.Modules
                 {
                     if (item.ShadowsOff)
                     {
-                        item.Renderer.shadowCastingMode = item.OrigShadowMode;
-                        item.ShadowsOff = false;
+                        item.RestoreShadows();
                         if (_culledShadowCount > 0) _culledShadowCount--;
                     }
                 }
             }
         }
 
-        public static void RegisterPiece(Piece piece)
+        public static void RegisterPiece(Piece piece, Renderer[] allRenderers)
         {
-            if (!OptimizationHelpers.IsValidWorldPiece(piece)) return;
-
             int pieceId = piece.GetInstanceID();
-            if (_pieceLookup.ContainsKey(pieceId)) return;
+            if (_indexMap.ContainsKey(pieceId)) return;
 
-            MeshRenderer[] renderers = piece.GetComponentsInChildren<MeshRenderer>(true);
-            if (renderers == null || renderers.Length == 0) return;
+            bool? nameEligible = IsSmallPieceByName(piece);
+            if (nameEligible == false) return;
 
-            List<TrackedPiece>? list = null;
+            TrackedShadowPiece? tracked = null;
 
-            for (int i = 0; i < renderers.Length; i++)
+            for (int i = 0; i < allRenderers.Length; i++)
             {
-                MeshRenderer mr = renderers[i];
-                if (mr == null || mr.shadowCastingMode == ShadowCastingMode.Off) continue;
-
-                if (IsSmallStructuralPiece(piece, mr))
+                if (allRenderers[i] is not MeshRenderer mr || mr == null || mr.shadowCastingMode == ShadowCastingMode.Off)
                 {
-                    var item = new TrackedPiece
+                    continue;
+                }
+
+                bool eligible = nameEligible == true;
+                if (!eligible)
+                {
+                    Bounds bounds = mr.bounds;
+                    float maxDim = Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z));
+                    eligible = maxDim <= 2.5f;
+                }
+
+                if (eligible)
+                {
+                    tracked ??= new TrackedShadowPiece
                     {
                         PieceId = pieceId,
                         Piece = piece,
-                        Transform = mr.transform,
-                        Renderer = mr,
-                        OrigShadowMode = mr.shadowCastingMode,
+                        Transform = piece.transform,
                         ShadowsOff = false
                     };
-
-                    _trackedPieces.Add(item);
-
-                    if (list == null)
+                    tracked.Renderers.Add(new RendererShadowBackup
                     {
-                        list = new List<TrackedPiece>();
-                        _pieceLookup[pieceId] = list;
-                    }
-                    list.Add(item);
+                        Renderer = mr,
+                        OrigMode = mr.shadowCastingMode
+                    });
                 }
+            }
+
+            if (tracked != null && tracked.Renderers.Count > 0)
+            {
+                int idx = _pieces.Count;
+                _pieces.Add(tracked);
+                _indexMap[pieceId] = idx;
             }
         }
 
-        public static void UnregisterPiece(Piece piece)
+        public static void UnregisterPieceById(int pieceId)
         {
-            if (piece == null) return;
+            if (!_indexMap.TryGetValue(pieceId, out int idx)) return;
+            SwapRemoveAt(idx);
+        }
 
-            int pieceId = piece.GetInstanceID();
-            if (_pieceLookup.TryGetValue(pieceId, out List<TrackedPiece> list))
+        private static void SwapRemoveAt(int idx)
+        {
+            TrackedShadowPiece removed = _pieces[idx];
+            if (removed.ShadowsOff)
             {
-                for (int i = 0; i < list.Count; i++)
-                {
-                    TrackedPiece item = list[i];
-                    if (item.ShadowsOff && _culledShadowCount > 0) _culledShadowCount--;
-                    if (item.Renderer != null && item.ShadowsOff)
-                    {
-                        item.Renderer.shadowCastingMode = item.OrigShadowMode;
-                        item.ShadowsOff = false;
-                    }
-                    _trackedPieces.Remove(item);
-                }
-                _pieceLookup.Remove(pieceId);
+                removed.RestoreShadows();
+                if (_culledShadowCount > 0) _culledShadowCount--;
             }
+            _indexMap.Remove(removed.PieceId);
+
+            int lastIdx = _pieces.Count - 1;
+            if (idx < lastIdx)
+            {
+                TrackedShadowPiece moved = _pieces[lastIdx];
+                _pieces[idx] = moved;
+                _indexMap[moved.PieceId] = idx;
+            }
+            _pieces.RemoveAt(lastIdx);
         }
 
         public static void RestoreAllShadows()
         {
-            for (int i = 0; i < _trackedPieces.Count; i++)
+            for (int i = 0; i < _pieces.Count; i++)
             {
-                TrackedPiece item = _trackedPieces[i];
-                if (item.ShadowsOff && item.Renderer != null)
+                if (_pieces[i].ShadowsOff)
                 {
-                    item.Renderer.shadowCastingMode = item.OrigShadowMode;
-                    item.ShadowsOff = false;
+                    _pieces[i].RestoreShadows();
                 }
             }
             _culledShadowCount = 0;
         }
 
-        public static bool IsSmallStructuralPiece(Piece piece, MeshRenderer renderer)
+        /// <summary>
+        /// Returns true if definitely small prop, false if large silhouette piece, null to fallback to bounds check.
+        /// </summary>
+        private static bool? IsSmallPieceByName(Piece piece)
         {
-            if (piece == null || renderer == null) return false;
-
             string name = piece.gameObject.name;
 
             if (OptimizationHelpers.ContainsIgnoreCase(name, "wall") ||
@@ -269,33 +288,7 @@ namespace OptiHouse.Modules
                 return true;
             }
 
-            Bounds bounds = renderer.bounds;
-            float maxDim = Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z));
-            return maxDim <= 2.5f;
+            return null;
         }
     }
-
-    #region Harmony Patches
-
-    [HarmonyPatch(typeof(Piece), "Awake")]
-    public static class Piece_Awake_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(Piece __instance)
-        {
-            PieceShadowCuller.RegisterPiece(__instance);
-        }
-    }
-
-    [HarmonyPatch(typeof(Piece), "OnDestroy")]
-    public static class Piece_OnDestroy_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(Piece __instance)
-        {
-            PieceShadowCuller.UnregisterPiece(__instance);
-        }
-    }
-
-    #endregion
 }

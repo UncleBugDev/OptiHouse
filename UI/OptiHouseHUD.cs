@@ -8,7 +8,8 @@ using UnityEngine;
 namespace OptiHouse.UI
 {
     /// <summary>
-    /// Real-time in-game diagnostics and benchmark HUD overlay for OptiHouse.
+    /// Zero-GC Real-time In-Game Diagnostics &amp; Benchmark HUD Overlay for OptiHouse v2.0.
+    /// Pre-formats all strings once every 0.25s inside CollectModuleMetrics() so OnGUI() allocates 0 bytes per frame.
     /// Toggled via Shift+F7 (configurable).
     /// </summary>
     public class OptiHouseHUD : MonoBehaviour
@@ -28,33 +29,28 @@ namespace OptiHouse.UI
         private float _onePercentLowFps;
         private float _avgFrameTimeMs;
 
-        // Cached metrics
-        private int _totalBasePieces;
-        private int _activePointLights;
-        private int _culledPointLights;
-        private int _activeShadowLights;
-        private int _totalLights;
-        private int _propShadowsCulled;
-        private int _propShadowsTotal;
-        private long _ashlandsSkips;
-        private long _envThrottled;
-        private int _smokePuffs;
-        private int _smokeCap = 25;
-        private int _clothCulled;
-        private int _clothTotal;
-        private int _standsCulled;
-        private int _standsTotal;
-        private int _tamedLod;
-        private int _tamedTotal;
-        private int _stationsCulled;
-        private int _stationsTotal;
-        private int _interiorCulled;
-        private int _interiorTotal;
-        private int _detailCulled;
-        private int _detailTotal;
-        private int _droppedTotal;
-        private int _droppedSleeping;
-        private bool _gfxJobsActive;
+        // Pre-formatted zero-GC HUD strings (updated at 4 Hz only)
+        private string _titleLine = $"<color=#55CCFF><b>⚡ OptiHouse v{OptiHousePlugin.ModVersion}</b></color>";
+        private string _statusLine = "<color=#00FF66><b>[ACTIVE]</b></color>";
+        private string _fpsLine = "<b>FPS:</b> --";
+        private string _frametimeLine = "<b>Frametime:</b> -- ms";
+        private string _instancingLine = "🧊  GPU Instanced Mats: <b>0</b>";
+        private string _lightsLine = "💡  Point Lights: <b>0</b>";
+        private string _propShadowsLine = "🌒  Prop Shadows: <b>0</b>";
+        private string _supportLine = "🏛️  WNT Support Cache: <b>0</b>";
+        private string _signsLine = "🪧  Warehouse Signs: <b>0</b>";
+        private string _smokeLine = "💨  Smoke Puffs: <b>0</b>";
+        private string _clothLine = "🚩  Banner Cloths: <b>0</b>";
+        private string _standsLine = "📦  Item & Trophy Stands: <b>0</b>";
+        private string _tamedLine = "🐗  Farm & Turrets: <b>0</b>";
+        private string _stationsLine = "🔨  Stations & Hives: <b>0</b>";
+        private string _interiorLine = "🚪  Interior Occlusion: <b>0</b>";
+        private string _detailLine = "📐  Ornamental Detail LOD: <b>0</b>";
+        private string _lootLine = "💎  Ground Loot: <b>0</b>";
+
+        private const string DividerLine = "<color=#2F4156>──────────────────────────────────────────────</color>";
+        private const string FooterControls = "<size=10><color=#7E94A8><b>[Shift+F7]</b> Toggle HUD  |  <b>[F7]</b> Toggle Optimizations</color></size>";
+        private const string FooterCredits = "<size=9><color=#FFAA44>Special thanks to <b>DaymonMontage</b> (twitch.tv/daymonmontage)</color></size>";
 
         private Texture2D? _bgTexture;
         private Texture2D? _borderTexture;
@@ -88,7 +84,7 @@ namespace OptiHouse.UI
         private void InitTextures()
         {
             _bgTexture = new Texture2D(1, 1);
-            _bgTexture.SetPixel(0, 0, new Color(0.06f, 0.08f, 0.11f, 0.88f));
+            _bgTexture.SetPixel(0, 0, new Color(0.06f, 0.08f, 0.11f, 0.90f));
             _bgTexture.Apply();
 
             _borderTexture = new Texture2D(1, 1);
@@ -119,7 +115,7 @@ namespace OptiHouse.UI
             {
                 _metricTimer = 0f;
                 CalculateFramerateMetrics();
-                CollectModuleMetrics();
+                BuildFormattedStrings();
             }
         }
 
@@ -144,6 +140,11 @@ namespace OptiHouse.UI
                 if (!requireShift || shiftHeld)
                 {
                     IsVisible = !IsVisible;
+                    if (IsVisible)
+                    {
+                        CalculateFramerateMetrics();
+                        BuildFormattedStrings();
+                    }
                 }
             }
         }
@@ -176,53 +177,46 @@ namespace OptiHouse.UI
             _onePercentLowFps = 1.0f / Mathf.Max(0.0001f, low1PercentFrameTime);
         }
 
-        private void CollectModuleMetrics()
+        private void BuildFormattedStrings()
         {
-            _totalBasePieces = GetTotalBasePieces();
+            _titleLine = $"<color=#55CCFF><b>⚡ OptiHouse v{OptiHousePlugin.ModVersion}</b></color>";
+            _statusLine = OptiHousePlugin.IsOptimizationActive
+                ? "<color=#00FF66><b>[OptiHouse: ACTIVE]</b></color>"
+                : "<color=#FF4444><b>[OptiHouse: DISABLED]</b></color>";
 
-            _activePointLights = LightShadowOptimizer.ActivePointLights;
-            _culledPointLights = LightShadowOptimizer.CulledPointLights;
-            _activeShadowLights = LightShadowOptimizer.ActiveShadowLights;
-            _totalLights = LightShadowOptimizer.TotalLights;
-            _envThrottled = LightShadowOptimizer.EnvChecksThrottled;
+            string lowColor = _onePercentLowFps >= 45f ? "#00FF66" : (_onePercentLowFps >= 30f ? "#FFFF55" : "#FF5555");
+            string fpsColor = _liveFps >= 55f ? "#00FF66" : (_liveFps >= 35f ? "#FFFF55" : "#FF5555");
 
-            _propShadowsCulled = PieceShadowCuller.CulledShadowCount;
-            _propShadowsTotal = PieceShadowCuller.TrackedPieceCount;
+            int totalBasePieces = GetTotalBasePieces();
+            _fpsLine = $"<b>FPS:</b> <color={fpsColor}>{_liveFps:F1}</color>  |  <b>Avg:</b> {_avgFps:F1}  |  <b>1% Low:</b> <color={lowColor}>{_onePercentLowFps:F1}</color>";
+            _frametimeLine = $"<b>Frametime:</b> {_avgFrameTimeMs:F1} ms  |  <b>Base Pieces:</b> {totalBasePieces:N0}";
 
-            _ashlandsSkips = WearNTearOptimizer.AshlandsUpdatesSkipped;
+            _instancingLine =
+                $"🧊  GPU Instanced: <color=#00FF66><b>{PrefabInstancingOptimizer.InstancedMaterialsCount}</b> mats</color>  |  <color=#55CCFF><b>{PrefabInstancingOptimizer.OffscreenParticleSystemsCount}</b></color> C++ VFX";
 
-            try
-            {
-                _smokePuffs = Smoke.GetTotalSmoke();
-                _smokeCap = SmokeOptimizer.GetConfiguredSmokeCap();
-            }
-            catch
-            {
-                _smokePuffs = 0;
-            }
+            _lightsLine =
+                $"💡  Point Lights: <color=#00FF66><b>{LightShadowOptimizer.ActivePointLights}</b> active</color> / <color=#FFAA44><b>{LightShadowOptimizer.CulledPointLights}</b> capped</color> ({LightShadowOptimizer.ActiveShadowLights} shd / {LightShadowOptimizer.TotalLights} tot)";
 
-            _clothCulled = ClothOptimizer.CulledClothCount;
-            _clothTotal = ClothOptimizer.TotalClothCount;
+            _propShadowsLine =
+                $"🌒  Prop Shadows: <color=#00FF66><b>{PieceShadowCuller.CulledShadowCount}</b> off</color> / {PieceShadowCuller.TrackedPieceCount} tracked";
 
-            _standsCulled = ItemStandOptimizer.CulledStandCount;
-            _standsTotal = ItemStandOptimizer.TotalStandCount;
+            _supportLine =
+                $"🏛️  PhysX Skips: <color=#00FF66><b>{WearNTearOptimizer.SupportSweepsSkipped:N0}</b></color> Support  |  <color=#55CCFF><b>{WearNTearOptimizer.AshlandsUpdatesSkipped:N0}</b></color> Ash";
 
-            _tamedTotal = TamedAnimalOptimizer.TotalTamedAnimals;
-            _tamedLod = TamedAnimalOptimizer.CulledTamedAnimals;
+            _signsLine =
+                $"🪧  Signs UI: <color=#00FF66><b>{SignOptimizer.CulledSigns}</b> culled</color> / {SignOptimizer.TotalSigns} tot (<color=#55CCFF><b>{SignOptimizer.PermissionChecksSkipped:N0}</b></color> UGC skips)";
 
-            _stationsTotal = CraftingStationOptimizer.TotalStations;
-            _stationsCulled = CraftingStationOptimizer.CulledStations;
+            int smokePuffs = 0;
+            try { smokePuffs = Smoke.GetTotalSmoke(); } catch { }
+            _smokeLine = $"💨  Smoke Puffs: <b>{smokePuffs}</b> active / {SmokeOptimizer.GetConfiguredSmokeCap()} cap";
 
-            _interiorCulled = InteriorOcclusionOptimizer.CulledInteriorPieces;
-            _interiorTotal = InteriorOcclusionOptimizer.TotalInteriorPieces;
-
-            _detailCulled = DetailPieceLOD.CulledDetailPieces;
-            _detailTotal = DetailPieceLOD.TotalDetailPieces;
-
-            _droppedTotal = ItemDropOptimizer.TotalDroppedItems;
-            _droppedSleeping = ItemDropOptimizer.SleepingItemsCount;
-
-            _gfxJobsActive = BootConfigTweaker.IsGfxJobsActive;
+            _clothLine = $"🚩  Banner Cloths: <color=#00FF66><b>{ClothOptimizer.CulledClothCount}</b> paused</color> / {ClothOptimizer.TotalClothCount} total";
+            _standsLine = $"📦  Item & Trophy Stands: <color=#00FF66><b>{ItemStandOptimizer.CulledStandCount}</b> culled</color> / {ItemStandOptimizer.TotalStandCount} total";
+            _tamedLine = $"🐗  Animals & Turrets: <color=#00FF66><b>{TamedAnimalOptimizer.CulledTamedAnimals}</b></color>/{TamedAnimalOptimizer.TotalTamedAnimals} LOD  |  <color=#55CCFF><b>{TurretOptimizer.IdleTicksSkipped:N0}</b></color> Turret";
+            _stationsLine = $"🔨  Stations & Hives: <color=#00FF66><b>{CraftingStationOptimizer.CulledStations}</b> paused</color> / {CraftingStationOptimizer.TotalStations} total";
+            _interiorLine = $"🚪  Interior Occlusion: <color=#00FF66><b>{InteriorOcclusionOptimizer.CulledInteriorPieces}</b> culled</color> / {InteriorOcclusionOptimizer.TotalInteriorPieces} total";
+            _detailLine = $"📐  Ornamental Detail LOD: <color=#00FF66><b>{DetailPieceLOD.CulledDetailPieces}</b> culled</color> / {DetailPieceLOD.TotalDetailPieces} total";
+            _lootLine = $"💎  Ground Loot: <b>{ItemDropOptimizer.TotalDroppedItems}</b> (<color=#00FF66><b>{ItemDropOptimizer.SleepingItemsCount}</b> sleeping</color>)";
         }
 
         private static int GetTotalBasePieces()
@@ -245,8 +239,8 @@ namespace OptiHouse.UI
             int currentFontSize = ModConfig.HudTextSize != null ? ModConfig.HudTextSize.Value : 13;
             UpdateStyles(currentFontSize);
 
-            float width = 410f;
-            float height = 560f;
+            float width = 425f;
+            float height = 575f;
             float margin = 16f;
 
             HudAnchorPosition anchor = ModConfig.HudPosition != null ? ModConfig.HudPosition.Value : HudAnchorPosition.TopLeft;
@@ -269,122 +263,41 @@ namespace OptiHouse.UI
 
             Rect panelRect = new Rect(x, y, width, height);
 
-            if (_borderTexture != null)
-            {
-                GUI.DrawTexture(panelRect, _borderTexture);
-            }
-            if (_bgTexture != null)
-            {
-                GUI.DrawTexture(new Rect(panelRect.x + 1f, panelRect.y + 1f, panelRect.width - 2f, panelRect.height - 2f), _bgTexture);
-            }
-            if (_headerTexture != null)
-            {
-                GUI.DrawTexture(new Rect(panelRect.x + 1f, panelRect.y + 1f, panelRect.width - 2f, 32f), _headerTexture);
-            }
+            if (_borderTexture != null) GUI.DrawTexture(panelRect, _borderTexture);
+            if (_bgTexture != null) GUI.DrawTexture(new Rect(panelRect.x + 1f, panelRect.y + 1f, panelRect.width - 2f, panelRect.height - 2f), _bgTexture);
+            if (_headerTexture != null) GUI.DrawTexture(new Rect(panelRect.x + 1f, panelRect.y + 1f, panelRect.width - 2f, 32f), _headerTexture);
 
             GUILayout.BeginArea(new Rect(panelRect.x + 12f, panelRect.y + 7f, panelRect.width - 24f, panelRect.height - 14f));
 
-            bool isOptimizing = OptiHousePlugin.IsOptimizationActive;
-            string statusStr = isOptimizing
-                ? "<color=#00FF66><b>[OptiHouse: ACTIVE]</b></color>"
-                : "<color=#FF4444><b>[OptiHouse: DISABLED]</b></color>";
-
             GUILayout.BeginHorizontal();
-            GUILayout.Label($"<color=#55CCFF><b>⚡ OptiHouse v{OptiHousePlugin.ModVersion}</b></color>", _titleStyle!);
+            GUILayout.Label(_titleLine, _titleStyle!);
             GUILayout.FlexibleSpace();
-            GUILayout.Label(statusStr, _subTitleStyle!);
+            GUILayout.Label(_statusLine, _subTitleStyle!);
             GUILayout.EndHorizontal();
 
             GUILayout.Space(6f);
 
-            string lowColor = _onePercentLowFps >= 45f ? "#00FF66" : (_onePercentLowFps >= 30f ? "#FFFF55" : "#FF5555");
-            string fpsColor = _liveFps >= 55f ? "#00FF66" : (_liveFps >= 35f ? "#FFFF55" : "#FF5555");
+            GUILayout.Label(_fpsLine, _labelStyle!);
+            GUILayout.Label(_frametimeLine, _labelStyle!);
+            GUILayout.Label(DividerLine, _dimStyle!);
 
-            GUILayout.Label(
-                $"<b>FPS:</b> <color={fpsColor}>{_liveFps:F1}</color>  |  <b>Avg:</b> {_avgFps:F1}  |  <b>1% Low:</b> <color={lowColor}>{_onePercentLowFps:F1}</color>",
-                _labelStyle!
-            );
-            GUILayout.Label($"<b>Frametime:</b> {_avgFrameTimeMs:F1} ms  |  <b>Base Pieces:</b> {_totalBasePieces:N0}", _labelStyle!);
+            GUILayout.Label(_instancingLine, _labelStyle!);
+            GUILayout.Label(_lightsLine, _labelStyle!);
+            GUILayout.Label(_propShadowsLine, _labelStyle!);
+            GUILayout.Label(_supportLine, _labelStyle!);
+            GUILayout.Label(_signsLine, _labelStyle!);
+            GUILayout.Label(_smokeLine, _labelStyle!);
+            GUILayout.Label(_clothLine, _labelStyle!);
+            GUILayout.Label(_standsLine, _labelStyle!);
+            GUILayout.Label(_tamedLine, _labelStyle!);
+            GUILayout.Label(_stationsLine, _labelStyle!);
+            GUILayout.Label(_interiorLine, _labelStyle!);
+            GUILayout.Label(_detailLine, _labelStyle!);
+            GUILayout.Label(_lootLine, _labelStyle!);
 
-            GUILayout.Label("<color=#2F4156>─────────────────────────────────────────────</color>", _dimStyle!);
-
-            GUILayout.Label(
-                $"💡  Point Lights: <color=#00FF66><b>{_activePointLights}</b> active</color> / <color=#FFAA44><b>{_culledPointLights}</b> capped</color> ({_activeShadowLights} shadows / {_totalLights} total)",
-                _labelStyle!
-            );
-
-            GUILayout.Label(
-                $"🌒  Prop Shadows: <color=#00FF66><b>{_propShadowsCulled}</b> off</color> / {_propShadowsTotal} tracked",
-                _labelStyle!
-            );
-
-            GUILayout.Label(
-                $"⚡  CPU Loop Skips: <color=#00FF66><b>{_ashlandsSkips:N0}</b></color> WNT  |  <color=#55CCFF><b>{_envThrottled:N0}</b></color> FireEnv",
-                _labelStyle!
-            );
-
-            GUILayout.Label(
-                $"💨  Smoke Puffs: <b>{_smokePuffs}</b> active / {_smokeCap} cap",
-                _labelStyle!
-            );
-
-            string particleStatus = (ModConfig.EnableFastParticleFade != null && ModConfig.EnableFastParticleFade.Value)
-                ? "<color=#00FF66>Active (1x clean fade)</color>"
-                : "<color=#FFAA44>Vanilla</color>";
-            GUILayout.Label($"✨  Particle Fade: {particleStatus}", _labelStyle!);
-
-            GUILayout.Label(
-                $"🚩  Banner Cloths: <color=#00FF66><b>{_clothCulled}</b> paused</color> / {_clothTotal} total",
-                _labelStyle!
-            );
-
-            GUILayout.Label(
-                $"📦  Item & Trophy Stands: <color=#00FF66><b>{_standsCulled}</b> culled</color> / {_standsTotal} total",
-                _labelStyle!
-            );
-
-            GUILayout.Label(
-                $"🐗  Tamed Animals: <color=#00FF66><b>{_tamedLod}</b> in LOD</color> / {_tamedTotal} total",
-                _labelStyle!
-            );
-
-            GUILayout.Label(
-                $"🔨  Stations & Hives: <color=#00FF66><b>{_stationsCulled}</b> paused</color> / {_stationsTotal} total",
-                _labelStyle!
-            );
-
-            GUILayout.Label(
-                $"🚪  Interior Occlusion: <color=#00FF66><b>{_interiorCulled}</b> culled</color> / {_interiorTotal} total",
-                _labelStyle!
-            );
-
-            GUILayout.Label(
-                $"📐  Ornamental Detail LOD: <color=#00FF66><b>{_detailCulled}</b> culled</color> / {_detailTotal} total",
-                _labelStyle!
-            );
-
-            GUILayout.Label(
-                $"💎  Ground Loot: <b>{_droppedTotal}</b> (<color=#00FF66><b>{_droppedSleeping}</b> sleeping</color>)",
-                _labelStyle!
-            );
-
-            string gfxJobsText = _gfxJobsActive
-                ? "<color=#00FF66>Active (Native/Gfx)</color>"
-                : (BootConfigTweaker.RestartRequired
-                    ? "<color=#FFFF55>Pending Restart</color>"
-                    : "<color=#FFAA44>Vanilla</color>");
-            GUILayout.Label($"🖥️  Engine Gfx Jobs: {gfxJobsText}", _labelStyle!);
-
-            GUILayout.Label("<color=#2F4156>─────────────────────────────────────────────</color>", _dimStyle!);
-
-            GUILayout.Label(
-                "<size=10><color=#7E94A8><b>[Shift+F7]</b> Toggle HUD  |  <b>[F7]</b> Toggle Optimizations</color></size>",
-                _dimStyle!
-            );
-            GUILayout.Label(
-                "<size=9><color=#FFAA44>Special thanks to <b>DaymonMontage</b> (twitch.tv/daymonmontage)</color></size>",
-                _dimStyle!
-            );
+            GUILayout.Label(DividerLine, _dimStyle!);
+            GUILayout.Label(FooterControls, _dimStyle!);
+            GUILayout.Label(FooterCredits, _dimStyle!);
 
             GUILayout.EndArea();
         }
@@ -392,39 +305,18 @@ namespace OptiHouse.UI
         private void UpdateStyles(int fontSize)
         {
             if (_labelStyle != null && _lastFontSize == fontSize) return;
-
             _lastFontSize = fontSize;
 
-            _labelStyle = new GUIStyle(GUI.skin.label)
-            {
-                fontSize = fontSize,
-                richText = true,
-                wordWrap = false
-            };
+            _labelStyle = new GUIStyle(GUI.skin.label) { fontSize = fontSize, richText = true, wordWrap = false };
             _labelStyle.normal.textColor = Color.white;
 
-            _titleStyle = new GUIStyle(GUI.skin.label)
-            {
-                fontSize = fontSize + 1,
-                richText = true,
-                wordWrap = false
-            };
+            _titleStyle = new GUIStyle(GUI.skin.label) { fontSize = fontSize + 1, richText = true, wordWrap = false };
             _titleStyle.normal.textColor = Color.white;
 
-            _subTitleStyle = new GUIStyle(GUI.skin.label)
-            {
-                fontSize = fontSize,
-                richText = true,
-                wordWrap = false
-            };
+            _subTitleStyle = new GUIStyle(GUI.skin.label) { fontSize = fontSize, richText = true, wordWrap = false };
             _subTitleStyle.normal.textColor = Color.white;
 
-            _dimStyle = new GUIStyle(GUI.skin.label)
-            {
-                fontSize = fontSize - 1,
-                richText = true,
-                wordWrap = false
-            };
+            _dimStyle = new GUIStyle(GUI.skin.label) { fontSize = fontSize - 1, richText = true, wordWrap = false };
             _dimStyle.normal.textColor = new Color(0.6f, 0.7f, 0.8f, 1f);
         }
     }

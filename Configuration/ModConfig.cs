@@ -13,11 +13,14 @@ namespace OptiHouse.Configuration
 
     public static class ModConfig
     {
-        // 1. General
+        // 1. General & Engine
         public static ConfigEntry<bool> MasterOptimizationEnabled = null!;
         public static ConfigEntry<KeyCode> ToggleHotkey = null!;
         public static ConfigEntry<bool> ShowNotificationOnToggle = null!;
         public static ConfigEntry<bool> EnableLogging = null!;
+        public static ConfigEntry<bool> EnableGpuInstancing = null!;
+        public static ConfigEntry<bool> EnableOffscreenParticleCulling = null!;
+        public static ConfigEntry<bool> EnableAmbientAudioCulling = null!;
         public static ConfigEntry<bool> EnableGfxJobsTweak = null!;
 
         // 2. Lighting
@@ -48,6 +51,7 @@ namespace OptiHouse.Configuration
 
         // 5. Structural
         public static ConfigEntry<bool> EnableStructuralOptimization = null!;
+        public static ConfigEntry<bool> EnableSupportEquilibriumCache = null!;
         public static ConfigEntry<bool> EnableWearNTearThrottling = null!;
         public static ConfigEntry<float> WearNTearThrottleInterval = null!;
         public static ConfigEntry<bool> SkipNonAshlandsMaterialUpdates = null!;
@@ -58,15 +62,18 @@ namespace OptiHouse.Configuration
         public static ConfigEntry<bool> EnableClothOptimization = null!;
         public static ConfigEntry<float> BannerClothCullDistance = null!;
 
-        // 7. Storage & ItemStands
+        // 7. Storage, Signs & ItemStands
         public static ConfigEntry<bool> EnableItemStandOptimization = null!;
         public static ConfigEntry<float> ItemStandCullDistance = null!;
+        public static ConfigEntry<bool> EnableSignOptimization = null!;
+        public static ConfigEntry<float> SignCullDistance = null!;
 
-        // 8. Farm Animals
+        // 8. Farm Animals & Turrets
         public static ConfigEntry<bool> EnableTamedAnimalLod = null!;
         public static ConfigEntry<float> TamedAnimalLodDistance = null!;
+        public static ConfigEntry<bool> EnableTurretOptimization = null!;
 
-        // 9. Crafting Stations
+        // 9. Crafting Stations & Beehives
         public static ConfigEntry<bool> EnableStationOptimization = null!;
         public static ConfigEntry<float> StationCullDistance = null!;
 
@@ -102,7 +109,7 @@ namespace OptiHouse.Configuration
                 "1. General",
                 "MasterOptimizationEnabled",
                 true,
-                new ConfigDescription("Master switch for all OptiHouse base optimizations. Can also be toggled in-game with the hotkey.")
+                new ConfigDescription("Master switch for all OptiHouse optimizations. Can also be toggled in-game with F7.")
             );
 
             ToggleHotkey = config.Bind(
@@ -126,6 +133,27 @@ namespace OptiHouse.Configuration
                 new ConfigDescription("Enable diagnostic debug logging in the BepInEx console.")
             );
 
+            EnableGpuInstancing = config.Bind(
+                "1. General",
+                "EnableGpuInstancing",
+                true,
+                new ConfigDescription("Automatically enables GPU Instancing on shared prefab materials across pieces, trees, rocks, and props to batch identical meshes into single DrawMeshInstanced calls.")
+            );
+
+            EnableOffscreenParticleCulling = config.Bind(
+                "1. General",
+                "EnableOffscreenParticleCulling",
+                true,
+                new ConfigDescription("Configures local-space looping ParticleSystems on prefabs to pause natively on C++ worker threads when off-screen.")
+            );
+
+            EnableAmbientAudioCulling = config.Bind(
+                "1. General",
+                "EnableAmbientAudioCulling",
+                true,
+                new ConfigDescription("Skips per-frame ZSFX audio reverb/distance math on out-of-range looping sounds (fires, portals, torches).")
+            );
+
             EnableGfxJobsTweak = config.Bind(
                 "1. General",
                 "EnableGfxJobsTweak",
@@ -138,7 +166,7 @@ namespace OptiHouse.Configuration
                 "2. Lighting",
                 "EnableLightOptimization",
                 true,
-                new ConfigDescription("Enable dynamic point light caps, shadow budget, flicker culling, and fireplace raycast throttling.")
+                new ConfigDescription("Enable dynamic point light caps, shadow budget, flicker frustum/distance culling, and fireplace raycast throttling.")
             );
 
             MaxActivePointLights = config.Bind(
@@ -146,7 +174,7 @@ namespace OptiHouse.Configuration
                 "MaxActivePointLights",
                 28,
                 new ConfigDescription(
-                    "Maximum active point lights via LightLod.m_lightLimit (0 = vanilla unlimited). Drastically cuts Forward-rendering multi-pass draw calls in torch-lit bases.",
+                    "Maximum active point lights via LightLod.m_lightLimit (0 = vanilla unlimited). Cuts multi-pass ForwardAdd draw calls in torch-lit bases.",
                     new AcceptableValueRange<int>(0, 128)
                 )
             );
@@ -189,7 +217,7 @@ namespace OptiHouse.Configuration
                 "2. Lighting",
                 "CullDistantLightFlicker",
                 true,
-                new ConfigDescription("Pause CPU LightFlicker sin/cos & transform jitter on lights beyond 22m (automatically defers to VPO if VPO is active).")
+                new ConfigDescription("Pause CPU LightFlicker sin/cos & transform jitter on off-screen or distant (>20m) lights.")
             );
 
             // [3. VFX]
@@ -308,7 +336,14 @@ namespace OptiHouse.Configuration
                 "5. Structural",
                 "EnableStructuralOptimization",
                 true,
-                new ConfigDescription("Enable structural piece shadow culling, WearNTear cover throttling, and Ashlands shader loop skipping. Never touches colliders.")
+                new ConfigDescription("Enable structural support equilibrium cache, shadow culling, WearNTear cover throttling, and Ashlands shader loop skipping. Never touches colliders.")
+            );
+
+            EnableSupportEquilibriumCache = config.Bind(
+                "5. Structural",
+                "EnableSupportEquilibriumCache",
+                true,
+                new ConfigDescription("Fixes Valheim's WearNTear.UpdateSupport ground/foundation cache-miss bug by skipping redundant Physics.OverlapBoxNonAlloc sweeps once base support reaches equilibrium (instantly invalidates on any build/destroy/terrain/rock/tree change).")
             );
 
             EnableWearNTearThrottling = config.Bind(
@@ -357,7 +392,7 @@ namespace OptiHouse.Configuration
                 "6. Cloth & Banners",
                 "EnableClothOptimization",
                 true,
-                new ConfigDescription("Pause Unity Cloth vertex physics simulation on distant banners, flags, and tapestries.")
+                new ConfigDescription("Pause Unity Cloth vertex physics simulation on off-screen or distant banners, flags, and tapestries.")
             );
 
             BannerClothCullDistance = config.Bind(
@@ -370,12 +405,12 @@ namespace OptiHouse.Configuration
                 )
             );
 
-            // [7. Storage & ItemStands]
+            // [7. Storage, Signs & ItemStands]
             EnableItemStandOptimization = config.Bind(
                 "7. Storage & ItemStands",
                 "EnableItemStandOptimization",
                 true,
-                new ConfigDescription("Pause particles and lights on distant mounted trophies and weapons in item stands / armor stands.")
+                new ConfigDescription("Pause particles and lights on off-screen or distant mounted trophies and weapons.")
             );
 
             ItemStandCullDistance = config.Bind(
@@ -388,7 +423,24 @@ namespace OptiHouse.Configuration
                 )
             );
 
-            // [8. Farm Animals]
+            EnableSignOptimization = config.Bind(
+                "7. Storage & ItemStands",
+                "EnableSignOptimization",
+                true,
+                new ConfigDescription("Culls unreadable distant/off-screen Sign world-space Canvases (TextMeshPro) and stops Valheim's 2-second UGC permission check spam on unchanged signs.")
+            );
+
+            SignCullDistance = config.Bind(
+                "7. Storage & ItemStands",
+                "SignCullDistance",
+                16.0f,
+                new ConfigDescription(
+                    "Distance (in meters) beyond which Sign UI Canvases are hidden.",
+                    new AcceptableValueRange<float>(5f, 50f)
+                )
+            );
+
+            // [8. Farm Animals & Turrets]
             EnableTamedAnimalLod = config.Bind(
                 "8. Farm Animals",
                 "EnableTamedAnimalLod",
@@ -404,6 +456,13 @@ namespace OptiHouse.Configuration
                     "Distance (in meters) beyond which tamed animal animators switch to CullUpdateTransforms.",
                     new AcceptableValueRange<float>(5f, 60f)
                 )
+            );
+
+            EnableTurretOptimization = config.Bind(
+                "8. Farm Animals",
+                "EnableTurretOptimization",
+                true,
+                new ConfigDescription("Throttles 50 Hz FixedUpdate idle visual scan rotation on distant targetless ballistas while preserving exact target-detection intervals.")
             );
 
             // [9. Crafting Stations]
@@ -429,7 +488,7 @@ namespace OptiHouse.Configuration
                 "10. HUD & Benchmark",
                 "EnableBenchmarkHUD",
                 true,
-                new ConfigDescription("Enable the real-time in-game benchmark overlay.")
+                new ConfigDescription("Enable the real-time zero-GC in-game benchmark overlay.")
             );
 
             BenchmarkHudHotkey = config.Bind(

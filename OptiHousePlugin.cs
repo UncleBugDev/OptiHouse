@@ -13,7 +13,7 @@ namespace OptiHouse
     {
         public const string ModGUID = "com.unclebug.optihouse";
         public const string ModName = "OptiHouse";
-        public const string ModVersion = "1.5.0";
+        public const string ModVersion = "2.0.0";
 
         public static OptiHousePlugin Instance { get; private set; } = null!;
         public static ManualLogSource Log => Instance.Logger;
@@ -37,12 +37,13 @@ namespace OptiHouse
             _harmony = new Harmony(ModGUID);
             _harmony.PatchAll();
 
-            // 4. Attach real-time benchmark HUD and ALL optimization subsystems directly
+            // 4. Attach zero-GC benchmark HUD and all standalone optimization subsystems
             gameObject.AddComponent<OptiHouseHUD>();
             gameObject.AddComponent<LightShadowOptimizer>();
             gameObject.AddComponent<PieceShadowCuller>();
             gameObject.AddComponent<ClothOptimizer>();
             gameObject.AddComponent<ItemStandOptimizer>();
+            gameObject.AddComponent<SignOptimizer>();
             gameObject.AddComponent<TamedAnimalOptimizer>();
             gameObject.AddComponent<CraftingStationOptimizer>();
             gameObject.AddComponent<InteriorOcclusionOptimizer>();
@@ -50,7 +51,14 @@ namespace OptiHouse
             gameObject.AddComponent<ItemDropOptimizer>();
             gameObject.AddComponent<TerrainOptimizationHelper>();
 
-            Log.LogInfo($"[{ModName}] v{ModVersion} initialized (all 10 optimization subsystems active). Special thanks to DaymonMontage (https://twitch.tv/daymonmontage)!");
+            // 5. Scan any pre-existing scene pieces/prefabs if hot-reloaded mid-session
+            PieceRegistry.ScanExistingScenePieces();
+            if (ZNetScene.instance != null)
+            {
+                PrefabInstancingOptimizer.OptimizeAllPrefabs(ZNetScene.instance);
+            }
+
+            Log.LogInfo($"[{ModName}] v{ModVersion} Standalone Engine & Base Edition initialized! Special thanks to DaymonMontage (https://twitch.tv/daymonmontage)!");
         }
 
         private void Update()

@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/UncleBugDev/OptiHouse/releases"><img src="https://img.shields.io/github/v/release/UncleBugDev/OptiHouse?style=for-the-badge&color=007ec6&logo=github" alt="GitHub Release" /></a>
-  <a href="https://thunderstore.io/c/valheim/p/UncleBugDev/OptiHouse/"><img src="https://img.shields.io/badge/Thunderstore-v1.5.0-orange?style=for-the-badge&logo=thunderstore" alt="Thunderstore" /></a>
+  <a href="https://thunderstore.io/c/valheim/p/UncleBugDev/OptiHouse/"><img src="https://img.shields.io/badge/Thunderstore-v2.0.0-orange?style=for-the-badge&logo=thunderstore" alt="Thunderstore" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/Valheim-PC%20%7C%20Steam-red?style=for-the-badge&logo=steam" alt="Platform" />
 </p>
@@ -51,10 +51,11 @@ When hundreds of building pieces, torches, braziers, smoke puffs, tamed animals,
 - **Demolition Dust Suppression:** Suppresses heavy debris chunk bursts and wood/stone dust particle spam when tearing down or rebuilding structures.
 - **Zero Risk to Gameplay:** Does not affect item drops, resource yields, or damage indicators.
 
-### 🏛️ 4. Structural CPU & Shadow Optimizations (`[Structural]` & `[Structural Detail LOD]`)
-- **Non-Ashlands `WearNTear` Loop Skip:** Skips `WearNTearUpdater`'s wasted per-second `UpdateAshlandsMaterialValues` iteration across non-Ashlands base pieces when burn/lava timers are zero.
-- **WearNTear Weather Cover Throttling:** Real-time throttles redundant `UpdateCover` sky raycast checks during storms on undamaged building pieces.
-- **Small Prop Shadow Culling & Ornamental Detail LOD:** Disables shadows on distant small props (>18m) and culls purely ornamental micro-pieces (crosses, carvings, dragonheads, brackets, 1m poles) beyond 38m while keeping **100% of walls, floors, pillars, and roof/ridge tiles solid**.
+### 🏛️ 4. Structural CPU, GPU Instancing & Shadow Optimizations (`[Structural]` & `[General]`)
+- **Hardware GPU Instancing & Native C++ Offscreen Particle Culling:** Automatically enables `Material.enableInstancing = true` across shared prefab materials (`Piece`, trees, rocks, props) and sets local-space looping `ParticleSystem`s to pause natively off-screen on C++ worker threads.
+- **WearNTear Support Equilibrium Cache:** Fixes Valheim's ground/foundation support cache-miss bug — skips redundant `Physics.OverlapBoxNonAlloc` sweeps once structure support reaches 100% vanilla equilibrium, instantly invalidating on any build, break, terrain dig, rock mine, or tree chop.
+- **Non-Ashlands `WearNTear` Loop Skip & Cover Throttling:** Skips `WearNTearUpdater`'s wasted per-second `UpdateAshlandsMaterialValues` iteration outside Ashlands and real-time throttles storm `UpdateCover` raycasts.
+- **Small Prop Shadow Culling, Warehouse `Sign` UI Culling & Ornamental Detail LOD:** Disables shadows on distant small props (>18m), hides world-space `Sign` Canvases beyond 16m/behind camera (stopping 2s UGC permission spam), and culls ornamental micro-pieces beyond 38m while keeping **100% of walls, floors, pillars, and roof/ridge tiles solid**.
 - **100% Structural Support Guarantee:** OptiHouse strictly preserves all physics colliders on all building pieces.
 
 ### 🚪 5. Smart Interior Occlusion Culling (`[Interior Occlusion]`)
@@ -157,7 +158,7 @@ A configuration file is generated at `BepInEx/config/com.unclebug.optihouse.cfg`
 
 ### Manual Installation
 1. Ensure [BepInExPack Valheim](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/) is installed.
-2. Download `OptiHouse_v1.5.0.zip` from Thunderstore or GitHub Releases.
+2. Download `OptiHouse_v2.0.0.zip` from Thunderstore or GitHub Releases.
 3. Extract `OptiHouse.dll` into your Valheim directory under `BepInEx/plugins/UncleBugDev-OptiHouse/`.
 4. Launch the game!
 

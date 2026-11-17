@@ -7,11 +7,9 @@ using UnityEngine;
 namespace OptiHouse.Modules
 {
     /// <summary>
-    /// Interior Occlusion Optimizer for OptiHouse.
-    /// Culls enclosed interior furniture, chests, beds, tables, rugs, and decor beyond InteriorCullDistance (default 26m).
-    /// - Never hides walls, roofs, floors, portals, hearths, fireplaces, or light fixtures.
-    /// - Snapshots only currently enabled renderers when culling to preserve WearNTear/ArmorStand visual states.
-    /// - Rate-limits enclosure checks on open-air furniture to avoid continuous Physics.Raycast overhead.
+    /// Interior Occlusion Optimizer for OptiHouse v2.0.
+    /// Uses O(1) swap-back unregistration, shared PieceRegistry Renderer arrays, and WearNTear.SetHealthVisual sync.
+    /// Never hides walls, roofs, floors, portals, hearths, fireplaces, or light fixtures.
     /// </summary>
     public class InteriorOcclusionOptimizer : MonoBehaviour
     {
@@ -61,7 +59,7 @@ namespace OptiHouse.Modules
         }
 
         private static readonly List<TrackedInteriorPiece> _trackedPieces = new List<TrackedInteriorPiece>();
-        private static readonly Dictionary<int, TrackedInteriorPiece> _pieceLookup = new Dictionary<int, TrackedInteriorPiece>();
+        private static readonly Dictionary<int, int> _indexMap = new Dictionary<int, int>();
 
         private static int _culledPieceCount;
         private static int _totalEnclosedCount;
@@ -77,34 +75,18 @@ namespace OptiHouse.Modules
         private void Awake()
         {
             Instance = this;
-            ScanExistingPieces();
         }
 
         private void OnDestroy()
         {
             RestoreAllRenderers();
             _trackedPieces.Clear();
-            _pieceLookup.Clear();
+            _indexMap.Clear();
             _culledPieceCount = 0;
             _totalEnclosedCount = 0;
             if (Instance == this)
             {
                 Instance = null;
-            }
-        }
-
-        public static void ScanExistingPieces()
-        {
-            Piece[] pieces = FindObjectsByType<Piece>(FindObjectsSortMode.None);
-            if (pieces != null)
-            {
-                for (int i = 0; i < pieces.Length; i++)
-                {
-                    if (pieces[i] != null)
-                    {
-                        RegisterPiece(pieces[i]);
-                    }
-                }
             }
         }
 
@@ -155,38 +137,26 @@ namespace OptiHouse.Modules
             float restoreDistSq = restoreDistance * restoreDistance;
             float now = Time.time;
 
-            int batchSize = Mathf.Min(300, total);
+            int batchSize = Mathf.Min(350, total);
             for (int i = 0; i < batchSize; i++)
             {
+                if (_trackedPieces.Count == 0) break;
                 _currentIndex++;
-                if (_currentIndex >= _trackedPieces.Count)
-                {
-                    _currentIndex = 0;
-                }
+                if (_currentIndex >= _trackedPieces.Count) _currentIndex = 0;
 
                 TrackedInteriorPiece item = _trackedPieces[_currentIndex];
                 if (item.Piece == null || item.Transform == null)
                 {
-                    if (item.IsCulled && _culledPieceCount > 0) _culledPieceCount--;
-                    if (item.IsEnclosed && _totalEnclosedCount > 0) _totalEnclosedCount--;
-                    _pieceLookup.Remove(item.InstanceId);
-                    _trackedPieces.RemoveAt(_currentIndex);
+                    SwapRemoveAt(_currentIndex);
                     if (_currentIndex > 0) _currentIndex--;
                     continue;
                 }
 
-                if (!item.Piece.gameObject.activeInHierarchy)
-                {
-                    continue;
-                }
+                if (!item.Piece.gameObject.activeInHierarchy) continue;
 
-                // Lazily re-check enclosure on outdoor furniture at most once every 15 seconds
                 if (!item.IsEnclosed)
                 {
-                    if (now < item.NextEnclosureCheckTime)
-                    {
-                        continue;
-                    }
+                    if (now < item.NextEnclosureCheckTime) continue;
 
                     if (IsEnclosedPiece(item.Piece))
                     {
@@ -226,17 +196,11 @@ namespace OptiHouse.Modules
             }
         }
 
-        public static void RegisterPiece(Piece piece)
+        public static void RegisterPiece(Piece piece, Renderer[] renderers)
         {
-            if (!OptimizationHelpers.IsValidWorldPiece(piece)) return;
-
             int id = piece.GetInstanceID();
-            if (_pieceLookup.ContainsKey(id)) return;
-
+            if (_indexMap.ContainsKey(id)) return;
             if (!IsInteriorPiece(piece)) return;
-
-            Renderer[] renderers = piece.GetComponentsInChildren<Renderer>(true);
-            if (renderers == null || renderers.Length == 0) return;
 
             bool enclosed = IsEnclosedPiece(piece);
 
@@ -278,56 +242,56 @@ namespace OptiHouse.Modules
                 }
             }
 
+            int idx = _trackedPieces.Count;
             _trackedPieces.Add(item);
-            _pieceLookup[id] = item;
+            _indexMap[id] = idx;
         }
 
-        public static void UnregisterPiece(Piece piece)
+        public static void UnregisterPieceById(int pieceId)
         {
-            if (piece == null) return;
-
-            int id = piece.GetInstanceID();
-            if (_pieceLookup.TryGetValue(id, out TrackedInteriorPiece item))
-            {
-                if (item.IsCulled)
-                {
-                    item.Restore();
-                    if (_culledPieceCount > 0) _culledPieceCount--;
-                }
-                if (item.IsEnclosed && _totalEnclosedCount > 0) _totalEnclosedCount--;
-                _trackedPieces.Remove(item);
-                _pieceLookup.Remove(id);
-            }
+            if (!_indexMap.TryGetValue(pieceId, out int idx)) return;
+            SwapRemoveAt(idx);
         }
 
-        public static void RefreshPiece(Piece piece)
+        private static void SwapRemoveAt(int idx)
         {
-            if (piece == null) return;
-
-            int id = piece.GetInstanceID();
-            if (_pieceLookup.TryGetValue(id, out TrackedInteriorPiece item))
+            TrackedInteriorPiece removed = _trackedPieces[idx];
+            if (removed.IsCulled)
             {
-                bool wasCulled = item.IsCulled;
-                if (wasCulled)
-                {
-                    item.Restore();
-                }
-                item.AllRenderers = piece.GetComponentsInChildren<Renderer>(true) ?? Array.Empty<Renderer>();
-                if (wasCulled)
-                {
-                    item.Cull();
-                }
+                removed.Restore();
+                if (_culledPieceCount > 0) _culledPieceCount--;
             }
+            if (removed.IsEnclosed && _totalEnclosedCount > 0) _totalEnclosedCount--;
+            _indexMap.Remove(removed.InstanceId);
+
+            int lastIdx = _trackedPieces.Count - 1;
+            if (idx < lastIdx)
+            {
+                TrackedInteriorPiece moved = _trackedPieces[lastIdx];
+                _trackedPieces[idx] = moved;
+                _indexMap[moved.InstanceId] = idx;
+            }
+            _trackedPieces.RemoveAt(lastIdx);
+        }
+
+        public static void RefreshPieceById(int pieceId, Piece piece)
+        {
+            if (!_indexMap.TryGetValue(pieceId, out int idx)) return;
+            TrackedInteriorPiece item = _trackedPieces[idx];
+
+            bool wasCulled = item.IsCulled;
+            if (wasCulled) item.Restore();
+            item.AllRenderers = piece.GetComponentsInChildren<Renderer>(true) ?? Array.Empty<Renderer>();
+            if (wasCulled) item.Cull();
         }
 
         public static void RestoreAllRenderers()
         {
             for (int i = 0; i < _trackedPieces.Count; i++)
             {
-                TrackedInteriorPiece item = _trackedPieces[i];
-                if (item.IsCulled)
+                if (_trackedPieces[i].IsCulled)
                 {
-                    item.Restore();
+                    _trackedPieces[i].Restore();
                 }
             }
             _culledPieceCount = 0;
@@ -337,7 +301,6 @@ namespace OptiHouse.Modules
         {
             if (piece == null || piece.gameObject == null) return false;
 
-            // Never hide fire sources or light fixtures (prevents floating lights without meshes)
             if (piece.GetComponent<Fireplace>() != null || piece.GetComponentInChildren<Light>() != null)
             {
                 return false;
@@ -468,34 +431,7 @@ namespace OptiHouse.Modules
             }
 
             Vector3 origin = piece.transform.position + Vector3.up * 0.25f;
-            if (_pieceMask != 0 && Physics.Raycast(origin, Vector3.up, 20f, _pieceMask, QueryTriggerInteraction.Ignore))
-            {
-                return true;
-            }
-
-            return false;
-        }
-    }
-
-    #region Harmony Patches
-
-    [HarmonyPatch(typeof(Piece), "Awake")]
-    public static class InteriorOcclusionOptimizer_Piece_Awake_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(Piece __instance)
-        {
-            InteriorOcclusionOptimizer.RegisterPiece(__instance);
-        }
-    }
-
-    [HarmonyPatch(typeof(Piece), "OnDestroy")]
-    public static class InteriorOcclusionOptimizer_Piece_OnDestroy_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(Piece __instance)
-        {
-            InteriorOcclusionOptimizer.UnregisterPiece(__instance);
+            return _pieceMask != 0 && Physics.Raycast(origin, Vector3.up, 20f, _pieceMask, QueryTriggerInteraction.Ignore);
         }
     }
 
@@ -505,11 +441,9 @@ namespace OptiHouse.Modules
         [HarmonyPostfix]
         public static void Postfix(ItemStand __instance)
         {
-            if (__instance != null)
-            {
-                Piece p = __instance.GetComponent<Piece>();
-                if (p != null) InteriorOcclusionOptimizer.RefreshPiece(p);
-            }
+            if (__instance == null) return;
+            Piece p = __instance.GetComponent<Piece>();
+            if (p != null) InteriorOcclusionOptimizer.RefreshPieceById(p.GetInstanceID(), p);
         }
     }
 
@@ -519,13 +453,9 @@ namespace OptiHouse.Modules
         [HarmonyPostfix]
         public static void Postfix(ArmorStand __instance)
         {
-            if (__instance != null)
-            {
-                Piece p = __instance.GetComponent<Piece>();
-                if (p != null) InteriorOcclusionOptimizer.RefreshPiece(p);
-            }
+            if (__instance == null) return;
+            Piece p = __instance.GetComponent<Piece>();
+            if (p != null) InteriorOcclusionOptimizer.RefreshPieceById(p.GetInstanceID(), p);
         }
     }
-
-    #endregion
 }

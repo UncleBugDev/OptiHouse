@@ -1,68 +1,83 @@
 using System.Collections.Generic;
-using HarmonyLib;
 using OptiHouse.Configuration;
 using UnityEngine;
 
 namespace OptiHouse.Modules
 {
     /// <summary>
-    /// Cloth Optimizer for OptiHouse.
-    /// Pauses Unity Cloth vertex physics solvers on distant banners, flags, and tapestries
-    /// beyond BannerClothCullDistance (default 16m with 3m hysteresis).
+    /// Cloth Optimizer for OptiHouse v2.0.
+    /// Pauses Unity Cloth vertex physics solvers on banners, flags, and tapestries when beyond
+    /// BannerClothCullDistance (default 16m) OR behind the player's camera frustum (&gt;6m behind).
+    /// Uses O(1) swap-back unregistration via PieceRegistry.
     /// </summary>
     public class ClothOptimizer : MonoBehaviour
     {
         public static ClothOptimizer? Instance { get; private set; }
 
-        private class TrackedCloth
+        private class TrackedClothPiece
         {
             public int PieceId;
             public Piece Piece = null!;
-            public Cloth Cloth = null!;
             public Transform Transform = null!;
+            public Cloth[] Cloths = null!;
+            public readonly List<Cloth> DisabledCloths = new List<Cloth>(2);
             public bool IsCulled;
+
+            public void Cull()
+            {
+                if (IsCulled) return;
+                DisabledCloths.Clear();
+                for (int i = 0; i < Cloths.Length; i++)
+                {
+                    Cloth c = Cloths[i];
+                    if (c != null && c.enabled)
+                    {
+                        c.enabled = false;
+                        DisabledCloths.Add(c);
+                    }
+                }
+                IsCulled = true;
+            }
+
+            public void Restore()
+            {
+                if (!IsCulled) return;
+                for (int i = 0; i < DisabledCloths.Count; i++)
+                {
+                    if (DisabledCloths[i] != null)
+                    {
+                        DisabledCloths[i].enabled = true;
+                    }
+                }
+                DisabledCloths.Clear();
+                IsCulled = false;
+            }
         }
 
-        private static readonly List<TrackedCloth> _trackedCloths = new List<TrackedCloth>();
-        private static readonly Dictionary<int, List<TrackedCloth>> _pieceLookup = new Dictionary<int, List<TrackedCloth>>();
+        private static readonly List<TrackedClothPiece> _pieces = new List<TrackedClothPiece>();
+        private static readonly Dictionary<int, int> _indexMap = new Dictionary<int, int>();
 
         private static int _culledClothCount;
         private int _currentIndex;
         private bool _wasOptimizationActive = true;
 
-        public static int TotalClothCount => _trackedCloths.Count;
+        public static int TotalClothCount => _pieces.Count;
         public static int CulledClothCount => _culledClothCount;
 
         private void Awake()
         {
             Instance = this;
-            ScanExistingPieces();
         }
 
         private void OnDestroy()
         {
             RestoreAllCloths();
-            _trackedCloths.Clear();
-            _pieceLookup.Clear();
+            _pieces.Clear();
+            _indexMap.Clear();
             _culledClothCount = 0;
             if (Instance == this)
             {
                 Instance = null;
-            }
-        }
-
-        public static void ScanExistingPieces()
-        {
-            Piece[] pieces = FindObjectsByType<Piece>(FindObjectsSortMode.None);
-            if (pieces != null)
-            {
-                for (int i = 0; i < pieces.Length; i++)
-                {
-                    if (pieces[i] != null)
-                    {
-                        RegisterPiece(pieces[i]);
-                    }
-                }
             }
         }
 
@@ -84,10 +99,14 @@ namespace OptiHouse.Modules
 
             _wasOptimizationActive = true;
 
-            int total = _trackedCloths.Count;
+            int total = _pieces.Count;
             if (total == 0) return;
 
-            Vector3 refPos = OptimizationHelpers.GetReferencePosition();
+            if (!OptimizationHelpers.TryGetCameraView(out Vector3 camPos, out Vector3 camForward))
+            {
+                return;
+            }
+
             float cullDistance = ModConfig.BannerClothCullDistance != null
                 ? ModConfig.BannerClothCullDistance.Value
                 : 16.0f;
@@ -96,47 +115,40 @@ namespace OptiHouse.Modules
             float restoreDistance = Mathf.Max(0f, cullDistance - 3.0f);
             float restoreDistSq = restoreDistance * restoreDistance;
 
-            int batchSize = Mathf.Min(50, total);
+            int batchSize = Mathf.Min(60, total);
             for (int i = 0; i < batchSize; i++)
             {
+                if (_pieces.Count == 0) break;
                 _currentIndex++;
-                if (_currentIndex >= _trackedCloths.Count)
-                {
-                    _currentIndex = 0;
-                }
+                if (_currentIndex >= _pieces.Count) _currentIndex = 0;
 
-                TrackedCloth item = _trackedCloths[_currentIndex];
-                if (item.Cloth == null || item.Transform == null || item.Piece == null)
+                TrackedClothPiece item = _pieces[_currentIndex];
+                if (item.Piece == null || item.Transform == null)
                 {
-                    if (item.IsCulled && _culledClothCount > 0) _culledClothCount--;
-                    _pieceLookup.Remove(item.PieceId);
-                    _trackedCloths.RemoveAt(_currentIndex);
+                    SwapRemoveAt(_currentIndex);
                     if (_currentIndex > 0) _currentIndex--;
                     continue;
                 }
 
-                if (!item.Cloth.gameObject.activeInHierarchy)
-                {
-                    continue;
-                }
+                if (!item.Piece.gameObject.activeInHierarchy) continue;
 
-                float sqrDist = (item.Transform.position - refPos).sqrMagnitude;
+                Vector3 pos = item.Transform.position;
+                float sqrDist = (pos - camPos).sqrMagnitude;
+                bool behindCam = OptimizationHelpers.IsBehindCamera(pos, camPos, camForward, 36f);
 
-                if (sqrDist > cullDistSq)
+                if (sqrDist > cullDistSq || behindCam)
                 {
-                    if (!item.IsCulled && item.Cloth.enabled)
+                    if (!item.IsCulled)
                     {
-                        item.Cloth.enabled = false;
-                        item.IsCulled = true;
+                        item.Cull();
                         _culledClothCount++;
                     }
                 }
-                else if (sqrDist < restoreDistSq)
+                else if (sqrDist < restoreDistSq && !behindCam)
                 {
                     if (item.IsCulled)
                     {
-                        item.Cloth.enabled = true;
-                        item.IsCulled = false;
+                        item.Restore();
                         if (_culledClothCount > 0) _culledClothCount--;
                     }
                 }
@@ -145,114 +157,80 @@ namespace OptiHouse.Modules
 
         public static void RegisterPiece(Piece piece)
         {
-            if (!OptimizationHelpers.IsValidWorldPiece(piece)) return;
-
             int pieceId = piece.GetInstanceID();
-            if (_pieceLookup.ContainsKey(pieceId)) return;
+            if (_indexMap.ContainsKey(pieceId)) return;
 
             Cloth[] cloths = piece.GetComponentsInChildren<Cloth>(true);
             if (cloths == null || cloths.Length == 0) return;
 
-            List<TrackedCloth> list = new List<TrackedCloth>(cloths.Length);
-            Vector3 refPos = OptimizationHelpers.GetReferencePosition();
-            float cullDistance = ModConfig.BannerClothCullDistance != null
-                ? ModConfig.BannerClothCullDistance.Value
-                : 16.0f;
-            float cullDistSq = cullDistance * cullDistance;
+            var item = new TrackedClothPiece
+            {
+                PieceId = pieceId,
+                Piece = piece,
+                Transform = piece.transform,
+                Cloths = cloths,
+                IsCulled = false
+            };
 
             bool isOptActive = OptiHousePlugin.IsOptimizationActive &&
                                ModConfig.EnableClothOptimization != null &&
                                ModConfig.EnableClothOptimization.Value;
 
-            for (int i = 0; i < cloths.Length; i++)
+            if (isOptActive && OptimizationHelpers.TryGetCameraView(out Vector3 camPos, out Vector3 camForward))
             {
-                Cloth c = cloths[i];
-                if (c == null) continue;
-
-                var item = new TrackedCloth
+                float cullDistance = ModConfig.BannerClothCullDistance != null
+                    ? ModConfig.BannerClothCullDistance.Value
+                    : 16.0f;
+                Vector3 pos = item.Transform.position;
+                if ((pos - camPos).sqrMagnitude > cullDistance * cullDistance ||
+                    OptimizationHelpers.IsBehindCamera(pos, camPos, camForward, 36f))
                 {
-                    PieceId = pieceId,
-                    Piece = piece,
-                    Cloth = c,
-                    Transform = c.transform,
-                    IsCulled = false
-                };
-
-                if (isOptActive && c.enabled && (item.Transform.position - refPos).sqrMagnitude > cullDistSq)
-                {
-                    item.Cloth.enabled = false;
-                    item.IsCulled = true;
+                    item.Cull();
                     _culledClothCount++;
                 }
-
-                _trackedCloths.Add(item);
-                list.Add(item);
             }
 
-            if (list.Count > 0)
-            {
-                _pieceLookup[pieceId] = list;
-            }
+            int idx = _pieces.Count;
+            _pieces.Add(item);
+            _indexMap[pieceId] = idx;
         }
 
-        public static void UnregisterPiece(Piece piece)
+        public static void UnregisterPieceById(int pieceId)
         {
-            if (piece == null) return;
+            if (!_indexMap.TryGetValue(pieceId, out int idx)) return;
+            SwapRemoveAt(idx);
+        }
 
-            int pieceId = piece.GetInstanceID();
-            if (_pieceLookup.TryGetValue(pieceId, out List<TrackedCloth> list))
+        private static void SwapRemoveAt(int idx)
+        {
+            TrackedClothPiece removed = _pieces[idx];
+            if (removed.IsCulled)
             {
-                for (int i = 0; i < list.Count; i++)
-                {
-                    TrackedCloth item = list[i];
-                    if (item.IsCulled)
-                    {
-                        if (item.Cloth != null) item.Cloth.enabled = true;
-                        item.IsCulled = false;
-                        if (_culledClothCount > 0) _culledClothCount--;
-                    }
-                    _trackedCloths.Remove(item);
-                }
-                _pieceLookup.Remove(pieceId);
+                removed.Restore();
+                if (_culledClothCount > 0) _culledClothCount--;
             }
+            _indexMap.Remove(removed.PieceId);
+
+            int lastIdx = _pieces.Count - 1;
+            if (idx < lastIdx)
+            {
+                TrackedClothPiece moved = _pieces[lastIdx];
+                _pieces[idx] = moved;
+                _indexMap[moved.PieceId] = idx;
+            }
+            _pieces.RemoveAt(lastIdx);
         }
 
         public static void RestoreAllCloths()
         {
-            for (int i = 0; i < _trackedCloths.Count; i++)
+            for (int i = 0; i < _pieces.Count; i++)
             {
-                TrackedCloth item = _trackedCloths[i];
-                if (item.IsCulled)
+                if (_pieces[i].IsCulled)
                 {
-                    if (item.Cloth != null) item.Cloth.enabled = true;
-                    item.IsCulled = false;
+                    _pieces[i].Restore();
                 }
             }
             _culledClothCount = 0;
         }
     }
-
-    #region Harmony Patches
-
-    [HarmonyPatch(typeof(Piece), "Awake")]
-    public static class ClothOptimizer_Piece_Awake_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(Piece __instance)
-        {
-            ClothOptimizer.RegisterPiece(__instance);
-        }
-    }
-
-    [HarmonyPatch(typeof(Piece), "OnDestroy")]
-    public static class ClothOptimizer_Piece_OnDestroy_Patch
-    {
-        [HarmonyPostfix]
-        public static void Postfix(Piece __instance)
-        {
-            ClothOptimizer.UnregisterPiece(__instance);
-        }
-    }
-
-    #endregion
 }

@@ -2,6 +2,25 @@
 
 All notable changes to **OptiHouse** will be documented in this file.
 
+## [2.0.0] - 2026-11-18 (STANDALONE ENGINE & MEGA-BASE EDITION)
+### Added (Standalone Engine & Base Dominators)
+- **Hardware GPU Instancing & Native C++ Offscreen Particle Culling (`PrefabInstancingOptimizer`):**
+  - Automatically enables `Material.enableInstancing = true` across shared prefab materials (`Piece`, trees, rocks, props) on `ZNetScene.Awake`, allowing Unity to batch identical geometry into single `DrawMeshInstanced` calls with zero custom shader glitches or shadow regressions.
+  - Configures local-space looping `ParticleSystem`s on prefabs to `ParticleSystemCullingMode.Pause` so Unity's native C++ worker threads skip off-screen particle simulation automatically.
+  - Throttles out-of-range looping spatial `ZSFX` reverb/curve updates by 8x.
+- **`WearNTear.UpdateSupport()` Equilibrium Cache (`EnableSupportEquilibriumCache`):**
+  - Fixes Iron Gate's vanilla ground/foundation/rock support cache-miss bug (where ground-touching pieces re-run `Physics.OverlapBoxNonAlloc` every second forever).
+  - Once structure support values reach 100% vanilla equilibrium, skips redundant `OverlapBoxNonAlloc` sweeps while instantly invalidating on any `Piece` placement/destruction, `Heightmap` terrain edit (`ClearCachedSupport`), tree chop, or `MineRock5` chunk break. Colliders remain 100% untouched.
+- **Storage Warehouse Sign UI & UGC Spam Killer (`SignOptimizer`):**
+  - Culls world-space `Canvas` (`TextMeshProUGUI`) on signs beyond 16m or behind the camera (fixing floating text rendering through walls up to 128m and slashing `SendWillRenderCanvases` UI batching).
+  - Stops `Sign.UpdateText()` from firing `UpdateViewPermission()` (`RelationsManager.CheckPermissionAsync` + delegate GC allocation) every 2 seconds on unchanged signs.
+- **Unified Single-Hook `PieceRegistry` + $O(1)$ Swap-Back Unregistration:**
+  - Consolidated 8 separate `Piece.Awake` / `Piece.OnDestroy` patches into a single pass sharing one `Renderer[]` lookup, with $O(1)$ swap-back removal (eliminating $O(N^2)$ freezes when portaling away from 20,000+ piece bases) and `WearNTear.SetHealthVisual` sync.
+- **Camera-Frustum Cone Culling & Ballista Idle LOD (`TurretOptimizer`):**
+  - Pauses banner `Cloth` physics, `Sign` canvases, and `LightFlicker` trigonometry behind the player's camera (>5–6m behind) and throttles 50 Hz idle quaternion scans on distant targetless ballistas while preserving exact target scan intervals.
+- **Zero-GC Benchmark HUD (`OptiHouseHUD`):**
+  - Pre-formats all overlay strings at 4 Hz so `OnGUI()` allocates 0 bytes per frame.
+
 ## [1.5.0] - 2026-11-17 (DEEP ARCHITECTURAL OVERHAUL & REAL FPS BREAKTHROUGH)
 ### Fixed (Critical Audit Fixes)
 - **Revived 6 Dead Subsystems:** Fixed critical Harmony initialization bug where `LightShadowOptimizer`, `PieceShadowCuller`, `ClothOptimizer`, `ItemStandOptimizer`, `TamedAnimalOptimizer`, and `CraftingStationOptimizer` used `[HarmonyPatch(typeof(OptiHousePlugin), "Awake")]` after `Awake()` was already executing — causing their `MonoBehaviour.Update()` loops to **never run**. All 10 subsystems now attach directly and reliably in `OptiHousePlugin.Awake()`.
