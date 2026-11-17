@@ -2,6 +2,18 @@
 
 All notable changes to **OptiHouse** will be documented in this file.
 
+## [2.2.0] - 2026-11-18 (C++ CAMERA CULLING, PORTAL FREEZE KILLER & MEGA-FARM EDITION)
+### Added & Fixed
+- **Hardware C++ SIMD Camera Layer Culling (`CameraLayerCullOptimizer`):**
+  - Valheim leaves `GameCamera`'s `layerCullDistances` at `0` (forcing Unity to evaluate tiny clutter out to ~1000m+).
+  - OptiHouse now enables spherical C++ SIMD per-layer culling (`layerCullSpherical = true`) strictly on tiny clutter layers: `item` (`55m`), `Default_small` (`65m`), and `piece_nonsolid` (`80m`), cutting thousands of main-camera and shadow-cascade evaluations with zero C# loop cost while keeping main `piece`, `terrain`, and `Default` layers untouched to the horizon.
+- **Portal & Mega-Base Arrival Freeze Killer (`ZoneLoadPacer`):**
+  - Eliminates 30x/sec $O(N \log N)$ `QuickSort` stalls across 20,000+ uncreated ZDOs in `ZNetScene.CreateObjectsSorted` by caching a contiguous value-type priority/distance queue across ticks.
+  - Replaces vanilla's uncapped `Count / 100` (= 200+ prefabs in one frame!) post-portal burst with a high-resolution `Stopwatch` millisecond budget (`3.5 ms` live gameplay, `18.0 ms` during black loading screens), streaming massive castles radially outward from the player's feet at 60+ FPS.
+- **Mega-Farm & 3,000-Crop Optimizer + Vanilla `Plant.SUpdate` Bugfix (`FarmPlantOptimizer`):**
+  - **Fixed Vanilla Iron Gate IL Bug (`Plant.SUpdate`):** Decompilation revealed an inverted timer branch (`!(time > m_updateTime)`) in vanilla `Plant.SUpdate`, causing every planted crop to run `Heightmap.FindHeightmap`, `HaveRoof` (`100m` raycast), and `HaveGrowSpace` (`30`-collider `OverlapSphereNonAlloc`) continuously on every `SlowUpdater` cycle instead of every 10s! OptiHouse restores a true `14s` interval while preserving immediate spawn visuals, exact `10.0s` overcrowding/roof status feedback, and 100% exact ZDO harvest times.
+  - **Crop & Forage Shadow/Probe Culling:** Strips `ShadowCastingMode` and `ReflectionProbeUsage` on distant (`>12m`) `Plant` and small `Pickable` meshes using an $O(1)$ swap-back list (zero lag during mass Atgeir harvesting).
+
 ## [2.1.0] - 2026-11-18 (DEEP ENGINE & SHADER INSTANCING UNLEASHED)
 ### Added & Fixed (Vanilla Engine Bottlenecks Discovered via Decompilation)
 - **Fixed Two Vanilla Valheim `MaterialPropertyBlock` Bugs Breaking GPU Instancing (`MaterialBatchingOptimizer`):**

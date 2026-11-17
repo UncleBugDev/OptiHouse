@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/UncleBugDev/OptiHouse/releases"><img src="https://img.shields.io/github/v/release/UncleBugDev/OptiHouse?style=for-the-badge&color=007ec6&logo=github" alt="GitHub Release" /></a>
-  <a href="https://thunderstore.io/c/valheim/p/UncleBugDev/OptiHouse/"><img src="https://img.shields.io/badge/Thunderstore-v2.1.0-orange?style=for-the-badge&logo=thunderstore" alt="Thunderstore" /></a>
+  <a href="https://thunderstore.io/c/valheim/p/UncleBugDev/OptiHouse/"><img src="https://img.shields.io/badge/Thunderstore-v2.2.0-orange?style=for-the-badge&logo=thunderstore" alt="Thunderstore" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/Valheim-PC%20%7C%20Steam-red?style=for-the-badge&logo=steam" alt="Platform" />
 </p>
@@ -53,7 +53,10 @@ When hundreds of building pieces, torches, braziers, smoke puffs, tamed animals,
 - **Demolition Dust Suppression:** Suppresses heavy debris chunk bursts and wood/stone dust particle spam when tearing down or rebuilding structures.
 - **Zero Risk to Gameplay:** Does not affect item drops, resource yields, or damage indicators.
 
-### 🏛️ 4. Structural CPU, True GPU Instancing & Shadow Optimizations (`[Structural]` & `[General]`)
+### 🏛️ 4. Structural CPU, True GPU Instancing & Portal Streaming (`[Structural]`, `[General]` & `[Camera & Portal Streaming]`)
+- **Hardware C++ SIMD Camera Layer Culling:** Configures spherical `Camera.layerCullDistances` on `GameCamera` for tiny clutter layers (`item` 55m, `Default_small` 65m, `piece_nonsolid` 80m) so Unity's C++ culling jobs skip distant clutter in both camera and shadow cascades with zero C# overhead.
+- **Portal & Mega-Base Arrival Freeze Killer (`ZoneLoadPacer`):** Caches `ZNetScene`'s $O(N \log N)$ ZDO distance sort queue and paces post-portal prefab instantiation to a `3.5 ms` tick budget, eliminating multi-second freezes when teleporting into 20,000+ piece castles.
+- **Mega-Farm 3,000-Crop Optimizer (`[Mega-Farm & Crops]`):** Fixes Iron Gate's inverted `Plant.SUpdate` timer bug (`!(time > m_updateTime)`) that hammered `Raycast` + `OverlapSphereNonAlloc` continuously on every crop, and culls distant (`>12m`) `Plant`/`Pickable` shadows with $O(1)$ mass-harvest unregistration.
 - **True Hardware GPU Instancing + `MaterialMan` Bugfix:** Enables `Material.enableInstancing = true` across shared prefabs AND fixes two vanilla Iron Gate bugs that break instancing: clears empty C++ `MaterialPropertyBlock`s left behind after Hammer hover (`MaterialMan.UpdateBlock`), and prevents `RandomMaterialValues` (`RandMatSeed`) from breaking `DrawMeshInstanced` on Grausten, Black Marble, and Ashwood castles.
 - **`ZSyncTransform` Sleeping Physics & Under-Floor Grass Culling:** Throttles per-frame C++ sync checks on sleeping `Rigidbody` network objects by 16x and suppresses invisible/clipping `ClutterSystem` grass tufts directly underneath base floors and stone foundations.
 - **WearNTear Support Equilibrium Cache:** Fixes Valheim's ground/foundation support cache-miss bug — skips redundant `Physics.OverlapBoxNonAlloc` sweeps once structure support reaches 100% vanilla equilibrium, instantly invalidating on any build, break, terrain dig, rock mine, or tree chop.
@@ -161,7 +164,7 @@ A configuration file is generated at `BepInEx/config/com.unclebug.optihouse.cfg`
 
 ### Manual Installation
 1. Ensure [BepInExPack Valheim](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/) is installed.
-2. Download `OptiHouse_v2.1.0.zip` from Thunderstore or GitHub Releases.
+2. Download `OptiHouse_v2.2.0.zip` from Thunderstore or GitHub Releases.
 3. Extract `OptiHouse.dll` into your Valheim directory under `BepInEx/plugins/UncleBugDev-OptiHouse/`.
 4. Launch the game!
 

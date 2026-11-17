@@ -1,8 +1,8 @@
 {
   "name": "OptiHouse",
-  "version_number": "2.1.0",
+  "version_number": "2.2.0",
   "website_url": "https://github.com/UncleBugDev/OptiHouse",
-  "description": "Standalone Valheim Engine & Mega-Base Optimizer. Fixes MaterialMan & Grausten GPU Instancing bugs, Time-Slices Reflection Probes, Adaptive 2-Cascade Shadows, WearNTear Equilibrium Cache, ZSyncTransform & Under-Floor Grass Culling.",
+  "description": "Standalone Valheim Engine & Mega-Base Optimizer. C++ Camera Layer Culling, Portal Freeze Killer, Mega-Farm Plant Bugfix, True GPU Instancing, 9-Frame Reflection Probes, Adaptive Shadow Cascades & Support Cache.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2202"
   ]

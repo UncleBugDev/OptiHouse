@@ -110,6 +110,20 @@ namespace OptiHouse.Configuration
         public static ConfigEntry<float> DetailPieceCullDistance = null!;
         public static ConfigEntry<float> DetailPieceRestoreDistance = null!;
 
+        // 15. Camera C++ Layer Culling & Portal Pacer
+        public static ConfigEntry<bool> EnableCameraLayerCulling = null!;
+        public static ConfigEntry<float> ItemLayerCullDistance = null!;
+        public static ConfigEntry<float> SmallDecorLayerCullDistance = null!;
+        public static ConfigEntry<float> NonSolidPieceLayerCullDistance = null!;
+        public static ConfigEntry<bool> EnablePortalZonePacer = null!;
+        public static ConfigEntry<float> PortalSpawnBudgetMs = null!;
+
+        // 16. Mega-Farm & Crops (Plant & Pickable)
+        public static ConfigEntry<bool> EnableFarmOptimization = null!;
+        public static ConfigEntry<float> FarmPlantCheckInterval = null!;
+        public static ConfigEntry<bool> EnableFarmShadowCulling = null!;
+        public static ConfigEntry<float> FarmShadowCullDistance = null!;
+
         public static void Init(ConfigFile config)
         {
             // [1. General]
@@ -675,6 +689,96 @@ namespace OptiHouse.Configuration
                 new ConfigDescription(
                     "Distance (in meters) at which small ornamental details are restored (hysteresis margin).",
                     new AcceptableValueRange<float>(8f, 85f)
+                )
+            );
+
+            // [15. Camera & Portal Streaming]
+            EnableCameraLayerCulling = config.Bind(
+                "15. Camera & Portal Streaming",
+                "EnableCameraLayerCulling",
+                true,
+                new ConfigDescription("Enables native C++ SIMD spherical per-layer culling (Camera.layerCullDistances) on the main camera for small clutter layers (item, Default_small, piece_nonsolid). Never touches walls, roofs, or terrain.")
+            );
+
+            ItemLayerCullDistance = config.Bind(
+                "15. Camera & Portal Streaming",
+                "ItemLayerCullDistance",
+                55.0f,
+                new ConfigDescription(
+                    "Hardware spherical cull distance (in meters) for loose items on the 'item' layer.",
+                    new AcceptableValueRange<float>(20f, 200f)
+                )
+            );
+
+            SmallDecorLayerCullDistance = config.Bind(
+                "15. Camera & Portal Streaming",
+                "SmallDecorLayerCullDistance",
+                65.0f,
+                new ConfigDescription(
+                    "Hardware spherical cull distance (in meters) for tiny rocks, twigs, and debris on the 'Default_small' layer.",
+                    new AcceptableValueRange<float>(25f, 250f)
+                )
+            );
+
+            NonSolidPieceLayerCullDistance = config.Bind(
+                "15. Camera & Portal Streaming",
+                "NonSolidPieceLayerCullDistance",
+                80.0f,
+                new ConfigDescription(
+                    "Hardware spherical cull distance (in meters) for rugs, signs, seedlings, and small non-solid props on the 'piece_nonsolid' layer.",
+                    new AcceptableValueRange<float>(30f, 250f)
+                )
+            );
+
+            EnablePortalZonePacer = config.Bind(
+                "15. Camera & Portal Streaming",
+                "EnablePortalZonePacer",
+                true,
+                new ConfigDescription("Eliminates post-portal and mega-base arrival freezes by caching ZNetScene's O(N log N) ZDO distance sort queue and pacing prefab instantiation to a strict millisecond frame budget.")
+            );
+
+            PortalSpawnBudgetMs = config.Bind(
+                "15. Camera & Portal Streaming",
+                "PortalSpawnBudgetMs",
+                3.5f,
+                new ConfigDescription(
+                    "Maximum milliseconds per ZNetScene tick spent instantiating queued mega-base objects after leaving the loading screen.",
+                    new AcceptableValueRange<float>(1.0f, 15.0f)
+                )
+            );
+
+            // [16. Mega-Farm & Crops]
+            EnableFarmOptimization = config.Bind(
+                "16. Mega-Farm & Crops",
+                "EnableFarmOptimization",
+                true,
+                new ConfigDescription("Fixes Valheim's inverted Plant.SUpdate timer bug (which hammers Physics.Raycast + OverlapSphereNonAlloc continuously on thousands of crops) and culls crop shadows.")
+            );
+
+            FarmPlantCheckInterval = config.Bind(
+                "16. Mega-Farm & Crops",
+                "FarmPlantCheckInterval",
+                14.0f,
+                new ConfigDescription(
+                    "Seconds between growth/roof/space checks on settled farm crops after their initial 10s check (preserves 100% exact ZDO harvest timing).",
+                    new AcceptableValueRange<float>(5f, 45f)
+                )
+            );
+
+            EnableFarmShadowCulling = config.Bind(
+                "16. Mega-Farm & Crops",
+                "EnableFarmShadowCulling",
+                true,
+                new ConfigDescription("Disables real-time shadow casting and reflection probe lookups on distant farm crops and forageables (Plant & Pickable).")
+            );
+
+            FarmShadowCullDistance = config.Bind(
+                "16. Mega-Farm & Crops",
+                "FarmShadowCullDistance",
+                12.0f,
+                new ConfigDescription(
+                    "Distance (in meters) beyond which farm crops and small forageables stop casting shadows.",
+                    new AcceptableValueRange<float>(0f, 50f)
                 )
             );
         }

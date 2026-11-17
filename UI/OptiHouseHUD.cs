@@ -34,10 +34,12 @@ namespace OptiHouse.UI
         private string _frametimeLine = "<b>Frametime:</b> -- ms";
         private string _instancingLine = "🧊  GPU Instanced Mats: <b>0</b>";
         private string _engineBatchLine = "🪞  Refl & Batching: <b>--</b>";
+        private string _portalCamLine = "🌀  Cam & Portal Pacer: <b>--</b>";
         private string _lightsLine = "💡  Point Lights: <b>0</b>";
         private string _propShadowsLine = "🌒  Prop Shadows: <b>0</b>";
         private string _supportLine = "🏛️  WNT Support Cache: <b>0</b>";
         private string _zsyncLine = "🔄  ZSync & Grass: <b>0</b>";
+        private string _farmLine = "🌾  Mega-Farm Crops: <b>0</b>";
         private string _signsLine = "🪧  Warehouse Signs: <b>0</b>";
         private string _smokeLine = "💨  Smoke Puffs: <b>0</b>";
         private string _clothLine = "🚩  Banner Cloths: <b>0</b>";
@@ -197,6 +199,10 @@ namespace OptiHouse.UI
             _engineBatchLine =
                 $"🪞  Reflection Probes: <b>{reflStatus}</b>  |  <color=#55CCFF><b>{PrefabInstancingOptimizer.OffscreenParticleSystemsCount}</b></color> C++ VFX";
 
+            string camCullStatus = CameraLayerCullOptimizer.IsHardwareLayerCullActive ? "<color=#00FF66>ON</color>" : "OFF";
+            _portalCamLine =
+                $"🌀  C++ LayerCull: <b>{camCullStatus}</b>  |  Portal Sorts Saved: <color=#55CCFF><b>{ZoneLoadPacer.SortsSaved:N0}</b></color>";
+
             _lightsLine =
                 $"💡  Point Lights: <color=#00FF66><b>{LightShadowOptimizer.ActivePointLights}</b> active</color> / <color=#FFAA44><b>{LightShadowOptimizer.CulledPointLights}</b> capped</color> ({LightShadowOptimizer.ActiveShadowLights} shd / {LightShadowOptimizer.TotalLights} tot)";
 
@@ -209,6 +215,9 @@ namespace OptiHouse.UI
             long zsyncSkips = ZSyncTransformOptimizer.SleepingSyncsSkipped + ZSyncTransformOptimizer.DistantClientSyncsSkipped;
             _zsyncLine =
                 $"🔄  ZSync Skips: <color=#00FF66><b>{zsyncSkips:N0}</b></color>  |  🌿 Under-Floor Grass: <color=#55CCFF><b>{ClutterOptimizer.UnderFloorTuftsSuppressed:N0}</b></color>";
+
+            _farmLine =
+                $"🌾  Mega-Farm: <color=#00FF66><b>{FarmPlantOptimizer.CulledCropShadows}</b></color>/{FarmPlantOptimizer.TotalTrackedCrops} shd  |  <color=#55CCFF><b>{FarmPlantOptimizer.PlantPhysxChecksSaved:N0}</b></color> bug-skips";
 
             _signsLine =
                 $"🪧  Signs UI: <color=#00FF66><b>{SignOptimizer.CulledSigns}</b> culled</color> / {SignOptimizer.TotalSigns} tot (<color=#55CCFF><b>{SignOptimizer.PermissionChecksSkipped:N0}</b></color> UGC skips)";
@@ -233,8 +242,8 @@ namespace OptiHouse.UI
             int currentFontSize = ModConfig.HudTextSize != null ? ModConfig.HudTextSize.Value : 13;
             UpdateStyles(currentFontSize);
 
-            float width = 435f;
-            float height = 620f;
+            float width = 440f;
+            float height = 665f;
             float margin = 16f;
 
             HudAnchorPosition anchor = ModConfig.HudPosition != null ? ModConfig.HudPosition.Value : HudAnchorPosition.TopLeft;
@@ -277,10 +286,12 @@ namespace OptiHouse.UI
 
             GUILayout.Label(_instancingLine, _labelStyle!);
             GUILayout.Label(_engineBatchLine, _labelStyle!);
+            GUILayout.Label(_portalCamLine, _labelStyle!);
             GUILayout.Label(_lightsLine, _labelStyle!);
             GUILayout.Label(_propShadowsLine, _labelStyle!);
             GUILayout.Label(_supportLine, _labelStyle!);
             GUILayout.Label(_zsyncLine, _labelStyle!);
+            GUILayout.Label(_farmLine, _labelStyle!);
             GUILayout.Label(_signsLine, _labelStyle!);
             GUILayout.Label(_smokeLine, _labelStyle!);
             GUILayout.Label(_clothLine, _labelStyle!);

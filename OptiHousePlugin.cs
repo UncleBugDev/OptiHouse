@@ -13,7 +13,7 @@ namespace OptiHouse
     {
         public const string ModGUID = "com.unclebug.optihouse";
         public const string ModName = "OptiHouse";
-        public const string ModVersion = "2.1.0";
+        public const string ModVersion = "2.2.0";
 
         public static OptiHousePlugin Instance { get; private set; } = null!;
         public static ManualLogSource Log => Instance.Logger;
@@ -39,6 +39,7 @@ namespace OptiHouse
 
             // 4. Attach zero-GC benchmark HUD and all standalone optimization subsystems
             gameObject.AddComponent<OptiHouseHUD>();
+            gameObject.AddComponent<CameraLayerCullOptimizer>();
             gameObject.AddComponent<ReflectionProbeOptimizer>();
             gameObject.AddComponent<LightShadowOptimizer>();
             gameObject.AddComponent<PieceShadowCuller>();
@@ -50,14 +51,19 @@ namespace OptiHouse
             gameObject.AddComponent<InteriorOcclusionOptimizer>();
             gameObject.AddComponent<DetailPieceLOD>();
             gameObject.AddComponent<ItemDropOptimizer>();
+            gameObject.AddComponent<FarmPlantOptimizer>();
             gameObject.AddComponent<ClutterOptimizer>();
             gameObject.AddComponent<TerrainOptimizationHelper>();
 
-            // 5. Scan any pre-existing scene pieces/prefabs if hot-reloaded mid-session
+            // 5. Scan any pre-existing scene pieces/prefabs/camera if hot-reloaded mid-session
             PieceRegistry.ScanExistingScenePieces();
             if (ZNetScene.instance != null)
             {
                 PrefabInstancingOptimizer.OptimizeAllPrefabs(ZNetScene.instance);
+            }
+            if (GameCamera.instance != null)
+            {
+                CameraLayerCullOptimizer.ApplyToGameCamera(GameCamera.instance);
             }
 
             Log.LogInfo($"[{ModName}] v{ModVersion} Standalone Engine & Base Edition initialized! Special thanks to DaymonMontage (https://twitch.tv/daymonmontage)!");
