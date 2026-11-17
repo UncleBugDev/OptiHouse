@@ -1,16 +1,37 @@
 using System;
+using System.Collections.Generic;
+using System.Reflection;
 using BepInEx.Bootstrap;
 using UnityEngine;
 
 namespace OptiHouse.Modules
 {
     /// <summary>
-    /// Shared zero-allocation helpers for OptiHouse v2.0 optimization modules.
+    /// Shared zero-allocation helpers for OptiHouse v2.1 optimization modules.
     /// </summary>
     internal static class OptimizationHelpers
     {
         private static int _ghostLayer = -2;
         private static int _vpoInstalledState = -1;
+
+        private static readonly FieldInfo? _allPiecesField =
+            typeof(Piece).GetField("s_allPieces", BindingFlags.NonPublic | BindingFlags.Static);
+
+        public static int GetTotalPieceCount()
+        {
+            try
+            {
+                if (_allPiecesField?.GetValue(null) is List<Piece> list)
+                {
+                    return list.Count;
+                }
+            }
+            catch
+            {
+            }
+
+            return PieceShadowCuller.TrackedPieceCount;
+        }
 
         public static int GhostLayer
         {

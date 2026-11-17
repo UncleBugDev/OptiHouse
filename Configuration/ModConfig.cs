@@ -19,6 +19,11 @@ namespace OptiHouse.Configuration
         public static ConfigEntry<bool> ShowNotificationOnToggle = null!;
         public static ConfigEntry<bool> EnableLogging = null!;
         public static ConfigEntry<bool> EnableGpuInstancing = null!;
+        public static ConfigEntry<bool> FixMaterialManInstancingBug = null!;
+        public static ConfigEntry<bool> StripPieceRandomMaterialBlocks = null!;
+        public static ConfigEntry<bool> OptimizeReflectionProbes = null!;
+        public static ConfigEntry<float> ReflectionUpdateInterval = null!;
+        public static ConfigEntry<bool> OptimizeZSyncTransform = null!;
         public static ConfigEntry<bool> EnableOffscreenParticleCulling = null!;
         public static ConfigEntry<bool> EnableAmbientAudioCulling = null!;
         public static ConfigEntry<bool> EnableGfxJobsTweak = null!;
@@ -27,6 +32,8 @@ namespace OptiHouse.Configuration
         public static ConfigEntry<bool> EnableLightOptimization = null!;
         public static ConfigEntry<int> MaxActivePointLights = null!;
         public static ConfigEntry<int> MaxShadowCastingLights = null!;
+        public static ConfigEntry<bool> EnableAdaptiveShadowCascades = null!;
+        public static ConfigEntry<int> MegaBaseCascadeThreshold = null!;
         public static ConfigEntry<bool> DisableTorchShadows = null!;
         public static ConfigEntry<float> LightCullDistance = null!;
         public static ConfigEntry<bool> ThrottleFireplaceEnvChecks = null!;
@@ -89,8 +96,9 @@ namespace OptiHouse.Configuration
         public static ConfigEntry<float> InteriorCullDistance = null!;
         public static ConfigEntry<bool> EnableSmartInteriorCulling = null!;
 
-        // 12. Terrain Helpers
+        // 12. Terrain & Clutter Helpers
         public static ConfigEntry<bool> EnableTerrainSanityCheck = null!;
+        public static ConfigEntry<bool> SuppressUnderFloorGrass = null!;
 
         // 13. Item Drops & Loot Clutter
         public static ConfigEntry<bool> EnableItemDropOptimization = null!;
@@ -140,6 +148,44 @@ namespace OptiHouse.Configuration
                 new ConfigDescription("Automatically enables GPU Instancing on shared prefab materials across pieces, trees, rocks, and props to batch identical meshes into single DrawMeshInstanced calls.")
             );
 
+            FixMaterialManInstancingBug = config.Bind(
+                "1. General",
+                "FixMaterialManInstancingBug",
+                true,
+                new ConfigDescription("Fixes Valheim's MaterialMan.UpdateBlock bug where cleared Hammer highlights leave an empty C++ MaterialPropertyBlock attached to renderers, permanently breaking GPU Instancing.")
+            );
+
+            StripPieceRandomMaterialBlocks = config.Bind(
+                "1. General",
+                "StripPieceRandomMaterialBlocks",
+                true,
+                new ConfigDescription("Skips per-block RandomMaterialValues (RandMatSeed) MaterialPropertyBlocks on Grausten, Black Marble, and Ashwood pieces so entire stone/marble castles batch via DrawMeshInstanced.")
+            );
+
+            OptimizeReflectionProbes = config.Bind(
+                "1. General",
+                "OptimizeReflectionProbes",
+                true,
+                new ConfigDescription("Time-slices ReflectionUpdate 6-face cubemap renders across 9 frames, strips probe shadows/micro-layers, and throttles stationary re-renders to eliminate the 3-second stutter spike.")
+            );
+
+            ReflectionUpdateInterval = config.Bind(
+                "1. General",
+                "ReflectionUpdateInterval",
+                14.0f,
+                new ConfigDescription(
+                    "Interval in seconds between environment reflection cubemap renders when stationary inside a base (vanilla default is 3.0s).",
+                    new AcceptableValueRange<float>(3f, 60f)
+                )
+            );
+
+            OptimizeZSyncTransform = config.Bind(
+                "1. General",
+                "OptimizeZSyncTransform",
+                true,
+                new ConfigDescription("Throttles redundant per-frame C++ physics/ZDO sync checks on physically sleeping ZSyncTransform Rigidbodies and unchanged distant network objects.")
+            );
+
             EnableOffscreenParticleCulling = config.Bind(
                 "1. General",
                 "EnableOffscreenParticleCulling",
@@ -186,6 +232,23 @@ namespace OptiHouse.Configuration
                 new ConfigDescription(
                     "Maximum number of point lights allowed to cast real-time dynamic shadows near the player.",
                     new AcceptableValueRange<int>(0, 32)
+                )
+            );
+
+            EnableAdaptiveShadowCascades = config.Bind(
+                "2. Lighting",
+                "EnableAdaptiveShadowCascades",
+                true,
+                new ConfigDescription("Automatically drops directional sun shadow cascades from 4 to 2 when inside a dense mega-base (cutting sun shadow draw calls by 50%), restoring 4 cascades upon leaving.")
+            );
+
+            MegaBaseCascadeThreshold = config.Bind(
+                "2. Lighting",
+                "MegaBaseCascadeThreshold",
+                2500,
+                new ConfigDescription(
+                    "Minimum loaded building piece count to trigger 2-cascade mega-base directional shadow mode.",
+                    new AcceptableValueRange<int>(500, 20000)
                 )
             );
 
@@ -553,6 +616,13 @@ namespace OptiHouse.Configuration
                 "EnableTerrainSanityCheck",
                 true,
                 new ConfigDescription("Detect legacy uncompressed terrain modification stacks in base zones.")
+            );
+
+            SuppressUnderFloorGrass = config.Bind(
+                "12. Terrain Helpers",
+                "SuppressUnderFloorGrass",
+                true,
+                new ConfigDescription("Prevents ClutterSystem from spawning and rendering invisible/clipping grass tufts directly beneath ground-level base floors and stone foundations.")
             );
 
             // [13. Item Drops & Loot Clutter]

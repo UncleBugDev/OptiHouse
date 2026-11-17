@@ -2,6 +2,23 @@
 
 All notable changes to **OptiHouse** will be documented in this file.
 
+## [2.1.0] - 2026-11-18 (DEEP ENGINE & SHADER INSTANCING UNLEASHED)
+### Added & Fixed (Vanilla Engine Bottlenecks Discovered via Decompilation)
+- **Fixed Two Vanilla Valheim `MaterialPropertyBlock` Bugs Breaking GPU Instancing (`MaterialBatchingOptimizer`):**
+  - **`MaterialMan.PropertyContainer.UpdateBlock()` Empty-Block Poisoning Fix:** When `WearNTear.ResetHighlight()` clears Hammer hover colors (0.2s after looking at pieces), vanilla Valheim passes a non-null cleared `MaterialPropertyBlock` to `Renderer.SetPropertyBlock()`, keeping a native C++ `ShaderPropertySheet` (`HasPropertyBlock() == true`) attached forever and permanently disabling `DrawMeshInstanced` GPU Instancing on every piece your Hammer ever hovered! OptiHouse now calls `Renderer.SetPropertyBlock(null)` whenever `m_shaderProperties` reaches zero, immediately restoring hardware instancing.
+  - **Grausten / Black Marble / Ashwood Instancing Unlocker (`StripPieceRandomMaterialBlocks`):** Vanilla `RandomMaterialValues.CheckMaterial()` attaches unique `RandMatSeed` `MaterialPropertyBlock`s to 100% of Grausten, Black Marble, and Ashwood pieces, completely disabling `DrawMeshInstanced` across late-game stone/marble fortresses. Skipping `RandMatSeed` on placed `Piece`s unlocks full hardware GPU Instancing across entire castles.
+- **3-Second Cubemap Render Spike Killer (`ReflectionProbeOptimizer`):**
+  - Switches `ReflectionUpdate` probes (`m_probe1` / `m_probe2`) from synchronous 1-frame rendering to `ReflectionProbeTimeSlicingMode.IndividualFaces` (spread across 9 frames).
+  - Strips reflection probe shadow passes (`shadowDistance = 0f`) and micro-layers (`piece_nonsolid`, `item`, `Default_small`, `character`), and scales stationary indoor re-render intervals from `3s` to `14s` while preserving smooth `3s` dual-probe cross-fades.
+- **Adaptive Mega-Base Directional Shadow Cascades (`EnableAdaptiveShadowCascades`):**
+  - Dynamically drops `QualitySettings.shadowCascades` from `4` to `2` when inside a mega-base (`>= 2,500` loaded pieces, cutting directional sun shadow draw calls by 50%), automatically restoring `4` cascades upon leaving or toggling `F7`.
+  - Also disables `ReflectionProbeUsage` alongside shadow casting on small props beyond `18m` in `PieceShadowCuller`.
+- **`ZSyncTransform` Sleeping Physics & Zero-GC Comfort HUD (`ZSyncTransformOptimizer`):**
+  - Throttles per-frame C++ `OwnerSync` marshaling by 16x on physically sleeping (`Rigidbody.IsSleeping()`) non-character/non-projectile world objects (loot, logs, moored boats, parked carts) and throttles unchanged distant (`>35m`) multiplayer `ClientSync` checks by 4x.
+  - Caches `SE_Cozy.GetIconText()` localized comfort text to eliminate per-frame HUD GC allocations near base fires.
+- **Under-Foundation Grass Clutter Suppressor (`ClutterOptimizer`):**
+  - Prevents `ClutterSystem` from spawning and rendering invisible/clipping instanced grass tufts directly underneath ground-level base floors and stone foundations (`0.05m–2.1m` clearance), keeping gardens, crops, and courtyards untouched.
+
 ## [2.0.0] - 2026-11-18 (STANDALONE ENGINE & MEGA-BASE EDITION)
 ### Added (Standalone Engine & Base Dominators)
 - **Hardware GPU Instancing & Native C++ Offscreen Particle Culling (`PrefabInstancingOptimizer`):**

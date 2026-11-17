@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Reflection;
 using OptiHouse.Configuration;
 using OptiHouse.Modules;
 using UnityEngine;
@@ -35,9 +33,11 @@ namespace OptiHouse.UI
         private string _fpsLine = "<b>FPS:</b> --";
         private string _frametimeLine = "<b>Frametime:</b> -- ms";
         private string _instancingLine = "🧊  GPU Instanced Mats: <b>0</b>";
+        private string _engineBatchLine = "🪞  Refl & Batching: <b>--</b>";
         private string _lightsLine = "💡  Point Lights: <b>0</b>";
         private string _propShadowsLine = "🌒  Prop Shadows: <b>0</b>";
         private string _supportLine = "🏛️  WNT Support Cache: <b>0</b>";
+        private string _zsyncLine = "🔄  ZSync & Grass: <b>0</b>";
         private string _signsLine = "🪧  Warehouse Signs: <b>0</b>";
         private string _smokeLine = "💨  Smoke Puffs: <b>0</b>";
         private string _clothLine = "🚩  Banner Cloths: <b>0</b>";
@@ -60,9 +60,6 @@ namespace OptiHouse.UI
         private GUIStyle? _subTitleStyle;
         private GUIStyle? _dimStyle;
         private int _lastFontSize = -1;
-
-        private static readonly FieldInfo? _pieceListField =
-            typeof(Piece).GetField("s_allPieces", BindingFlags.NonPublic | BindingFlags.Static);
 
         private void Awake()
         {
@@ -187,21 +184,31 @@ namespace OptiHouse.UI
             string lowColor = _onePercentLowFps >= 45f ? "#00FF66" : (_onePercentLowFps >= 30f ? "#FFFF55" : "#FF5555");
             string fpsColor = _liveFps >= 55f ? "#00FF66" : (_liveFps >= 35f ? "#FFFF55" : "#FF5555");
 
-            int totalBasePieces = GetTotalBasePieces();
+            int totalBasePieces = OptimizationHelpers.GetTotalPieceCount();
+            string cascadeBadge = LightShadowOptimizer.IsMegaBaseShadowCascadeActive ? " <color=#00FF66>[2-Casc]</color>" : "";
             _fpsLine = $"<b>FPS:</b> <color={fpsColor}>{_liveFps:F1}</color>  |  <b>Avg:</b> {_avgFps:F1}  |  <b>1% Low:</b> <color={lowColor}>{_onePercentLowFps:F1}</color>";
-            _frametimeLine = $"<b>Frametime:</b> {_avgFrameTimeMs:F1} ms  |  <b>Base Pieces:</b> {totalBasePieces:N0}";
+            _frametimeLine = $"<b>Frametime:</b> {_avgFrameTimeMs:F1} ms  |  <b>Pieces:</b> {totalBasePieces:N0}{cascadeBadge}";
 
+            long batchRescues = MaterialBatchingOptimizer.EmptyPropertyBlocksCleared + MaterialBatchingOptimizer.PieceRandomBlocksPrevented;
             _instancingLine =
-                $"🧊  GPU Instanced: <color=#00FF66><b>{PrefabInstancingOptimizer.InstancedMaterialsCount}</b> mats</color>  |  <color=#55CCFF><b>{PrefabInstancingOptimizer.OffscreenParticleSystemsCount}</b></color> C++ VFX";
+                $"🧊  GPU Instanced: <color=#00FF66><b>{PrefabInstancingOptimizer.InstancedMaterialsCount}</b> mats</color>  |  <color=#55CCFF><b>{batchRescues:N0}</b></color> MPB rescues";
+
+            string reflStatus = ReflectionProbeOptimizer.IsTimeSlicedActive ? "<color=#00FF66>9-Frame Sliced</color>" : "Vanilla";
+            _engineBatchLine =
+                $"🪞  Reflection Probes: <b>{reflStatus}</b>  |  <color=#55CCFF><b>{PrefabInstancingOptimizer.OffscreenParticleSystemsCount}</b></color> C++ VFX";
 
             _lightsLine =
                 $"💡  Point Lights: <color=#00FF66><b>{LightShadowOptimizer.ActivePointLights}</b> active</color> / <color=#FFAA44><b>{LightShadowOptimizer.CulledPointLights}</b> capped</color> ({LightShadowOptimizer.ActiveShadowLights} shd / {LightShadowOptimizer.TotalLights} tot)";
 
             _propShadowsLine =
-                $"🌒  Prop Shadows: <color=#00FF66><b>{PieceShadowCuller.CulledShadowCount}</b> off</color> / {PieceShadowCuller.TrackedPieceCount} tracked";
+                $"🌒  Prop Shadows & Probes: <color=#00FF66><b>{PieceShadowCuller.CulledShadowCount}</b> off</color> / {PieceShadowCuller.TrackedPieceCount} tracked";
 
             _supportLine =
                 $"🏛️  PhysX Skips: <color=#00FF66><b>{WearNTearOptimizer.SupportSweepsSkipped:N0}</b></color> Support  |  <color=#55CCFF><b>{WearNTearOptimizer.AshlandsUpdatesSkipped:N0}</b></color> Ash";
+
+            long zsyncSkips = ZSyncTransformOptimizer.SleepingSyncsSkipped + ZSyncTransformOptimizer.DistantClientSyncsSkipped;
+            _zsyncLine =
+                $"🔄  ZSync Skips: <color=#00FF66><b>{zsyncSkips:N0}</b></color>  |  🌿 Under-Floor Grass: <color=#55CCFF><b>{ClutterOptimizer.UnderFloorTuftsSuppressed:N0}</b></color>";
 
             _signsLine =
                 $"🪧  Signs UI: <color=#00FF66><b>{SignOptimizer.CulledSigns}</b> culled</color> / {SignOptimizer.TotalSigns} tot (<color=#55CCFF><b>{SignOptimizer.PermissionChecksSkipped:N0}</b></color> UGC skips)";
@@ -219,19 +226,6 @@ namespace OptiHouse.UI
             _lootLine = $"💎  Ground Loot: <b>{ItemDropOptimizer.TotalDroppedItems}</b> (<color=#00FF66><b>{ItemDropOptimizer.SleepingItemsCount}</b> sleeping</color>)";
         }
 
-        private static int GetTotalBasePieces()
-        {
-            try
-            {
-                if (_pieceListField?.GetValue(null) is List<Piece> list)
-                {
-                    return list.Count;
-                }
-            }
-            catch { }
-            return PieceShadowCuller.TrackedPieceCount;
-        }
-
         private void OnGUI()
         {
             if (!IsVisible) return;
@@ -239,8 +233,8 @@ namespace OptiHouse.UI
             int currentFontSize = ModConfig.HudTextSize != null ? ModConfig.HudTextSize.Value : 13;
             UpdateStyles(currentFontSize);
 
-            float width = 425f;
-            float height = 575f;
+            float width = 435f;
+            float height = 620f;
             float margin = 16f;
 
             HudAnchorPosition anchor = ModConfig.HudPosition != null ? ModConfig.HudPosition.Value : HudAnchorPosition.TopLeft;
@@ -282,9 +276,11 @@ namespace OptiHouse.UI
             GUILayout.Label(DividerLine, _dimStyle!);
 
             GUILayout.Label(_instancingLine, _labelStyle!);
+            GUILayout.Label(_engineBatchLine, _labelStyle!);
             GUILayout.Label(_lightsLine, _labelStyle!);
             GUILayout.Label(_propShadowsLine, _labelStyle!);
             GUILayout.Label(_supportLine, _labelStyle!);
+            GUILayout.Label(_zsyncLine, _labelStyle!);
             GUILayout.Label(_signsLine, _labelStyle!);
             GUILayout.Label(_smokeLine, _labelStyle!);
             GUILayout.Label(_clothLine, _labelStyle!);

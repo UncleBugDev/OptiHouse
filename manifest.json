@@ -1,8 +1,8 @@
 {
   "name": "OptiHouse",
-  "version_number": "2.0.0",
+  "version_number": "2.1.0",
   "website_url": "https://github.com/UncleBugDev/OptiHouse",
-  "description": "Standalone Valheim Engine & Mega-Base Optimizer. GPU Instancing, WearNTear Support Equilibrium Cache, Point-Light Cap, Warehouse Sign UI Culler, O(1) Piece Registry, Frustum Culling & Smoke/VFX LOD.",
+  "description": "Standalone Valheim Engine & Mega-Base Optimizer. Fixes MaterialMan & Grausten GPU Instancing bugs, Time-Slices Reflection Probes, Adaptive 2-Cascade Shadows, WearNTear Equilibrium Cache, ZSyncTransform & Under-Floor Grass Culling.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2202"
   ]

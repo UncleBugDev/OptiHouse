@@ -96,6 +96,10 @@ namespace OptiHouse.Modules
         public static int CulledShadowLights => Mathf.Max(0, TotalLights - ActiveShadowLights);
         public static int CulledPointLights => Mathf.Max(0, TotalLights - ActivePointLights);
 
+        private static int _savedShadowCascades = -1;
+        private static bool _shadowCascadesReduced;
+        public static bool IsMegaBaseShadowCascadeActive => _shadowCascadesReduced;
+
         private float _updateTimer;
         private bool _wasOptimizationActive = true;
 
@@ -149,7 +153,56 @@ namespace OptiHouse.Modules
             }
             _updateTimer = 0f;
 
+            ManageAdaptiveShadowCascades();
             ManageScenePointLights();
+        }
+
+        private static void ManageAdaptiveShadowCascades()
+        {
+            bool allowAdaptive = ModConfig.EnableAdaptiveShadowCascades != null &&
+                                 ModConfig.EnableAdaptiveShadowCascades.Value;
+
+            if (!allowAdaptive)
+            {
+                RestoreShadowCascades();
+                return;
+            }
+
+            int threshold = ModConfig.MegaBaseCascadeThreshold != null
+                ? Mathf.Max(500, ModConfig.MegaBaseCascadeThreshold.Value)
+                : 2500;
+
+            int pieceCount = OptimizationHelpers.GetTotalPieceCount();
+            if (!_shadowCascadesReduced)
+            {
+                if (pieceCount >= threshold && QualitySettings.shadowCascades > 2)
+                {
+                    _savedShadowCascades = QualitySettings.shadowCascades;
+                    QualitySettings.shadowCascades = 2;
+                    _shadowCascadesReduced = true;
+                }
+            }
+            else
+            {
+                int restoreThreshold = Mathf.Max(200, threshold - 400);
+                if (pieceCount < restoreThreshold)
+                {
+                    RestoreShadowCascades();
+                }
+            }
+        }
+
+        private static void RestoreShadowCascades()
+        {
+            if (_shadowCascadesReduced)
+            {
+                if (_savedShadowCascades > 0)
+                {
+                    QualitySettings.shadowCascades = _savedShadowCascades;
+                }
+                _shadowCascadesReduced = false;
+                _savedShadowCascades = -1;
+            }
         }
 
         /// <summary>
@@ -251,6 +304,7 @@ namespace OptiHouse.Modules
 
         public static void RestoreAllLights()
         {
+            RestoreShadowCascades();
             LightLod.m_shadowLimit = -1;
             LightLod.m_lightLimit = -1;
 

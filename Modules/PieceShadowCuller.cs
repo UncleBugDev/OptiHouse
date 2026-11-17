@@ -18,6 +18,7 @@ namespace OptiHouse.Modules
         {
             public MeshRenderer Renderer;
             public ShadowCastingMode OrigMode;
+            public ReflectionProbeUsage OrigProbeUsage;
         }
 
         private class TrackedShadowPiece
@@ -37,6 +38,7 @@ namespace OptiHouse.Modules
                     if (mr != null)
                     {
                         mr.shadowCastingMode = ShadowCastingMode.Off;
+                        mr.reflectionProbeUsage = ReflectionProbeUsage.Off;
                     }
                 }
                 ShadowsOff = true;
@@ -51,6 +53,7 @@ namespace OptiHouse.Modules
                     if (mr != null)
                     {
                         mr.shadowCastingMode = Renderers[i].OrigMode;
+                        mr.reflectionProbeUsage = Renderers[i].OrigProbeUsage;
                     }
                 }
                 ShadowsOff = false;
@@ -191,7 +194,8 @@ namespace OptiHouse.Modules
                     tracked.Renderers.Add(new RendererShadowBackup
                     {
                         Renderer = mr,
-                        OrigMode = mr.shadowCastingMode
+                        OrigMode = mr.shadowCastingMode,
+                        OrigProbeUsage = mr.reflectionProbeUsage
                     });
                 }
             }

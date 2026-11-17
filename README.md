@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/UncleBugDev/OptiHouse/releases"><img src="https://img.shields.io/github/v/release/UncleBugDev/OptiHouse?style=for-the-badge&color=007ec6&logo=github" alt="GitHub Release" /></a>
-  <a href="https://thunderstore.io/c/valheim/p/UncleBugDev/OptiHouse/"><img src="https://img.shields.io/badge/Thunderstore-v2.0.0-orange?style=for-the-badge&logo=thunderstore" alt="Thunderstore" /></a>
+  <a href="https://thunderstore.io/c/valheim/p/UncleBugDev/OptiHouse/"><img src="https://img.shields.io/badge/Thunderstore-v2.1.0-orange?style=for-the-badge&logo=thunderstore" alt="Thunderstore" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/Valheim-PC%20%7C%20Steam-red?style=for-the-badge&logo=steam" alt="Platform" />
 </p>
@@ -35,11 +35,13 @@ When hundreds of building pieces, torches, braziers, smoke puffs, tamed animals,
 
 ## 🚀 Key Features & Optimizations
 
-### 💡 1. Dynamic Lighting, Shadow & Flicker Management (`[Lighting]`)
+### 💡 1. Dynamic Lighting, Shadow Cascades & Probe Management (`[Lighting]` & `[General]`)
+- **Adaptive Mega-Base Shadow Cascades:** Automatically drops directional sun `QualitySettings.shadowCascades` from `4` to `2` inside dense mega-bases (`>= 2,500` pieces), cutting directional sun shadow draw calls by **50%** and restoring `4` cascades as soon as you leave!
+- **9-Frame Time-Sliced Reflection Probes:** Eliminates `ReflectionUpdate`'s rhythmic 3-second stutter spike by spreading 6-face cubemap rendering across 9 frames (`IndividualFaces`), stripping probe shadows/micro-layers, and extending stationary indoor re-renders to `14s`.
 - **Native Forward Point-Light Cap (`LightLod.m_lightLimit`):** Uses Valheim's built-in priority fading system to cap simultaneous active point lights (default: 28), cutting up to 50% of redundant `ForwardAdd` render passes in torch-lit castles.
 - **Point Light Shadow Limiter:** Restricts active shadow-casting point lights to the closest sources (default: 6).
 - **Torch & Sconce Shadow Stripping + `CheckEnv` Throttle:** Strips heavy dynamic shadows from small torches/sconces and throttles redundant `Fireplace.CheckEnv` terrain raycasts from 4s to 20s.
-- **Distant `LightFlicker` Culling:** Pauses CPU flicker math beyond 22m (automatically defers to VPO if installed).
+- **Distant `LightFlicker` Culling:** Pauses CPU flicker math beyond 20m or behind camera (automatically defers to VPO if installed).
 
 ### 💨 2. Indoor Smoke Physics & Puff Throttling (`[Smoke]`)
 - **Smoke Puff Hard Cap:** Enforces a configurable cap on simultaneous active smoke particles (default: 25 vs vanilla's 100+). Prevents massive chimney bottlenecks and physics lag while keeping hearths functional.
@@ -51,8 +53,9 @@ When hundreds of building pieces, torches, braziers, smoke puffs, tamed animals,
 - **Demolition Dust Suppression:** Suppresses heavy debris chunk bursts and wood/stone dust particle spam when tearing down or rebuilding structures.
 - **Zero Risk to Gameplay:** Does not affect item drops, resource yields, or damage indicators.
 
-### 🏛️ 4. Structural CPU, GPU Instancing & Shadow Optimizations (`[Structural]` & `[General]`)
-- **Hardware GPU Instancing & Native C++ Offscreen Particle Culling:** Automatically enables `Material.enableInstancing = true` across shared prefab materials (`Piece`, trees, rocks, props) and sets local-space looping `ParticleSystem`s to pause natively off-screen on C++ worker threads.
+### 🏛️ 4. Structural CPU, True GPU Instancing & Shadow Optimizations (`[Structural]` & `[General]`)
+- **True Hardware GPU Instancing + `MaterialMan` Bugfix:** Enables `Material.enableInstancing = true` across shared prefabs AND fixes two vanilla Iron Gate bugs that break instancing: clears empty C++ `MaterialPropertyBlock`s left behind after Hammer hover (`MaterialMan.UpdateBlock`), and prevents `RandomMaterialValues` (`RandMatSeed`) from breaking `DrawMeshInstanced` on Grausten, Black Marble, and Ashwood castles.
+- **`ZSyncTransform` Sleeping Physics & Under-Floor Grass Culling:** Throttles per-frame C++ sync checks on sleeping `Rigidbody` network objects by 16x and suppresses invisible/clipping `ClutterSystem` grass tufts directly underneath base floors and stone foundations.
 - **WearNTear Support Equilibrium Cache:** Fixes Valheim's ground/foundation support cache-miss bug — skips redundant `Physics.OverlapBoxNonAlloc` sweeps once structure support reaches 100% vanilla equilibrium, instantly invalidating on any build, break, terrain dig, rock mine, or tree chop.
 - **Non-Ashlands `WearNTear` Loop Skip & Cover Throttling:** Skips `WearNTearUpdater`'s wasted per-second `UpdateAshlandsMaterialValues` iteration outside Ashlands and real-time throttles storm `UpdateCover` raycasts.
 - **Small Prop Shadow Culling, Warehouse `Sign` UI Culling & Ornamental Detail LOD:** Disables shadows on distant small props (>18m), hides world-space `Sign` Canvases beyond 16m/behind camera (stopping 2s UGC permission spam), and culls ornamental micro-pieces beyond 38m while keeping **100% of walls, floors, pillars, and roof/ridge tiles solid**.
@@ -158,7 +161,7 @@ A configuration file is generated at `BepInEx/config/com.unclebug.optihouse.cfg`
 
 ### Manual Installation
 1. Ensure [BepInExPack Valheim](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/) is installed.
-2. Download `OptiHouse_v2.0.0.zip` from Thunderstore or GitHub Releases.
+2. Download `OptiHouse_v2.1.0.zip` from Thunderstore or GitHub Releases.
 3. Extract `OptiHouse.dll` into your Valheim directory under `BepInEx/plugins/UncleBugDev-OptiHouse/`.
 4. Launch the game!
 
